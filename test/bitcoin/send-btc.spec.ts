@@ -39,6 +39,7 @@ describe("send-btc", () => {
       feeRate,
       toAddress: toWallet.address,
       toAmount,
+      dust600: false,
     });
 
     const psbt = bitcoin.Psbt.fromHex(result.psbtHex, { network });
@@ -76,6 +77,7 @@ describe("send-btc", () => {
       feeRate,
       toAddress: toWallet.address,
       toAmount,
+      dust600: false,
     });
 
     const psbt = bitcoin.Psbt.fromHex(result.psbtHex, { network });

@@ -7,4 +7,10 @@ export enum LoggerLevel {
   error,
 }
 
-export const config = require("../conf/config.json").config as Config;
+export const baseConfig = {};
+
+export const config = Object.assign(
+  {},
+  baseConfig,
+  require("../conf/config.json").config
+) as Config;

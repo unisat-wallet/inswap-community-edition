@@ -11,7 +11,8 @@ type AssetType =
   | "available"
   | "pendingAvailable"
   | "approve"
-  | "conditionalApprove";
+  | "conditionalApprove"
+  | "lock";
 
 export const allAssetType = [
   "swap",
@@ -20,6 +21,7 @@ export const allAssetType = [
   "pendingAvailable",
   "approve",
   "conditionalApprove",
+  "lock",
 ];
 
 export type NotifyAssetData = {
@@ -61,18 +63,22 @@ export class Assets {
 
   tryCreate(tick: string) {
     for (let assetType in this.map) {
-      if (!this.map[assetType][tick]) {
-        this.map[assetType][tick] = new Brc20({}, tick, "0", assetType);
-        this.map[assetType][tick].setObserver(this.observer);
+      this.tryCreateWithAssetType(tick, assetType);
+    }
+  }
 
-        if (this.observer) {
-          this.observer.notify<NotifyAssetData>("asset", {
-            assetType,
-            tick,
-            address: "0",
-            balance: "0",
-          });
-        }
+  tryCreateWithAssetType(tick: string, assetType: string) {
+    if (!this.map[assetType][tick]) {
+      this.map[assetType][tick] = new Brc20({}, tick, "0", assetType);
+      this.map[assetType][tick].setObserver(this.observer);
+
+      if (this.observer) {
+        this.observer.notify<NotifyAssetData>("asset", {
+          assetType,
+          tick,
+          address: "0",
+          balance: "0",
+        });
       }
     }
   }
@@ -83,6 +89,14 @@ export class Assets {
 
   get(tick: string, assetType: AssetType = "swap") {
     return this.map[assetType][tick];
+  }
+
+  getSwapSupply(tick: string) {
+    return uintCal([
+      this.get(tick, "swap")?.Supply || "0",
+      "add",
+      this.get(tick, "lock")?.Supply || "0",
+    ]);
   }
 
   getBalance(
@@ -103,11 +117,15 @@ export class Assets {
     tick: string,
     assetTypes: AssetType[]
   ): string {
-    let ret = "0";
-    assetTypes.forEach((assetType) => {
-      ret = uintCal([ret, "add", this.getBalance(address, tick, assetType)]);
-    });
-    return ret;
+    if (assetTypes.length == 1) {
+      return this.getBalance(address, tick, assetTypes[0]);
+    } else {
+      let ret = "0";
+      assetTypes.forEach((assetType) => {
+        ret = uintCal([ret, "add", this.getBalance(address, tick, assetType)]);
+      });
+      return ret;
+    }
   }
 
   mint(
@@ -136,6 +154,8 @@ export class Assets {
     fromAssetType: AssetType,
     toAssetType: AssetType
   ) {
+    this.tryCreateWithAssetType(tick, fromAssetType);
+    this.tryCreateWithAssetType(tick, toAssetType);
     this.map[fromAssetType][tick].burn(address, amount);
     this.map[toAssetType][tick].mint(address, amount);
   }
@@ -148,6 +168,8 @@ export class Assets {
     fromAssetType: AssetType,
     toAssetType: AssetType
   ) {
+    this.tryCreateWithAssetType(tick, fromAssetType);
+    this.tryCreateWithAssetType(tick, toAssetType);
     this.map[fromAssetType][tick].burn(from, amount);
     this.map[toAssetType][tick].mint(to, amount);
   }

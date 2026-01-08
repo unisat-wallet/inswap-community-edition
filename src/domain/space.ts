@@ -9,8 +9,19 @@ import {
   sortTickParams,
 } from "../contract/contract-utils";
 import { EventType } from "../types/api";
-import { AddressBalance, ContractConfig, SnapshotObj } from "../types/domain";
-import { ContractResult, FuncType, InternalFunc, Result } from "../types/func";
+import {
+  AddressLpBalance,
+  AddressTickBalance,
+  ContractConfig,
+  SnapshotObj,
+} from "../types/domain";
+import {
+  ContractResult,
+  FuncType,
+  InternalFunc,
+  RemoveLiqOut,
+  Result,
+} from "../types/func";
 import {
   ApproveOp,
   CommitOp,
@@ -20,12 +31,18 @@ import {
   TransferOp,
   WithdrawOp,
 } from "../types/op";
-import { PENDING_CURSOR, UNCONFIRM_HEIGHT } from "./constant";
+import {
+  LP_DECIMAL,
+  PENDING_CURSOR,
+  UNCONFIRM_HEIGHT,
+  ZERO_ADDRESS,
+} from "./constant";
 import {
   convertFuncInscription2Internal,
   convertFuncInternal2Inscription,
   convertResultToDecimal,
 } from "./convert-struct";
+import { LpReward } from "./lp-reward";
 import { AssetProcessing, NotifyDataCollector } from "./nofity-data-collector";
 import {
   checkOpEvent,
@@ -55,6 +72,7 @@ export class Space {
   private notifyDataCollector: NotifyDataCollector;
   private lastCommitId: string;
   private spaceType: SpaceType;
+  private lpReward: LpReward;
 
   get SpaceType() {
     return this.spaceType;
@@ -80,6 +98,10 @@ export class Space {
     return this.lastHandledApiEvent;
   }
 
+  get LpReward() {
+    return this.lpReward;
+  }
+
   constructor(
     snapshot: SnapshotObj,
     contractConfig: ContractConfig,
@@ -101,6 +123,11 @@ export class Space {
       this.assets,
       snapshot.contractStatus,
       contractConfig
+    );
+    this.lpReward = new LpReward(
+      snapshot.lpReward.poolMap,
+      snapshot.lpReward.userMap,
+      this
     );
 
     if (createNotifyDataCollector) {
@@ -215,11 +242,91 @@ export class Space {
     return this.contract;
   }
 
-  aggregate(
-    func: InternalFunc,
-    gasPrice: string,
-    height: number
-  ): ContractResult {
+  private testAggregate(params: {
+    func: InternalFunc;
+    gasPrice: string;
+    height: number;
+  }) {
+    const { func, gasPrice, height } = params;
+    let tick: string;
+    let addresses: string[] = [func.params.address];
+    if (func.func == FuncType.decreaseApproval) {
+      tick = func.params.tick;
+    } else if (func.func == FuncType.swap) {
+      tick = getPairStrV2(func.params.tickIn, func.params.tickOut);
+    } else if (func.func == FuncType.send || func.func == FuncType.sendLp) {
+      tick = func.params.tick;
+      addresses.push(func.params.to);
+    } else if (func.func == FuncType.lock || func.func == FuncType.unlock) {
+      tick = func.params.tick;
+    } else {
+      tick = getPairStrV2(func.params.tick0, func.params.tick1);
+    }
+    const ticks = [];
+    if (tick) {
+      ticks.push(tick);
+    }
+
+    const tmpPendingSpace = this.partialClone(addresses, ticks);
+    try {
+      tmpPendingSpace.aggregate({
+        func,
+        gasPrice,
+        height,
+      });
+
+      return true;
+    } catch (err) {
+      logger.error({
+        tag: TAG,
+        msg: "testAggregate",
+        func,
+        gasPrice,
+        height,
+        error: err.message,
+        stack: err.stack,
+      });
+      return false;
+    }
+  }
+
+  aggregate(params: {
+    func: InternalFunc;
+    gasPrice: string;
+    height: number;
+    skipInvalid?: boolean;
+    swapFeeRate?: string;
+  }): ContractResult {
+    let { func, gasPrice, height, skipInvalid, swapFeeRate } = params;
+    if (skipInvalid == undefined) {
+      skipInvalid = false;
+    }
+    if (skipInvalid) {
+      if (!this.testAggregate(params)) {
+        let out: ContractResult["out"] = {};
+        if (func.func == FuncType.addLiq || func.func == FuncType.removeLiq) {
+          out = {
+            tick0: func.params.tick0,
+            tick1: func.params.tick1,
+            amount0: 0,
+            amount1: 0,
+            reward0: 0,
+            reward1: 0,
+          };
+        } else if (func.func == FuncType.swap) {
+          out = { amount: 0 };
+        }
+        return {
+          func: func.func,
+          preResult: null,
+          result: null,
+          out,
+          gas: null,
+          success: false,
+        } as ContractResult;
+      }
+    }
+
     let funcLength: number;
     if (height < config.updateHeight1) {
       funcLength = getFuncInternalLength(
@@ -251,11 +358,30 @@ export class Space {
       this.assets.tryCreate(func.params.tick1);
       out = this.contract.deployPool(func.params);
     } else if (func.func == FuncType.addLiq) {
+      const pair = getPairStrV2(func.params.tick0, func.params.tick1);
+      const address = func.params.address;
+
+      this.LpReward.settlement(pair, address);
       out = this.contract.addLiq(func.params);
+      this.LpReward.updatePool(pair, true);
+      this.LpReward.settlement(pair, address);
     } else if (func.func == FuncType.swap) {
-      out = this.contract.swap(func.params);
+      let swapFeeRate1000: string;
+      if (swapFeeRate) {
+        swapFeeRate1000 = (parseFloat(swapFeeRate) * 1000).toString();
+      }
+      out = this.contract.swap(func.params, swapFeeRate1000);
     } else if (func.func == FuncType.removeLiq) {
+      const pair = getPairStrV2(func.params.tick0, func.params.tick1);
+      const address = func.params.address;
+      const lastLp = this.LpReward.settlement(pair, address);
       out = this.contract.removeLiq(func.params);
+      this.LpReward.updatePool(pair, true);
+      this.LpReward.settlement(pair, address);
+
+      const res = this.LpReward.claim(pair, address, func.params.lp, lastLp);
+      (out as RemoveLiqOut).reward0 = res.reward0;
+      (out as RemoveLiqOut).reward1 = res.reward1;
     } else if (func.func == FuncType.decreaseApproval) {
       try {
         const { address, tick, amount } = func.params;
@@ -268,10 +394,43 @@ export class Space {
     } else if (func.func == FuncType.send) {
       out = this.contract.send(func.params);
     } else if (func.func == FuncType.sendLp) {
+      const pair = func.params.tick;
+      const address = func.params.address;
+      const to = func.params.to;
+      const lastLp = this.LpReward.settlement(pair, address);
+      if (to != ZERO_ADDRESS) {
+        this.LpReward.settlement(pair, to);
+      }
       out = this.contract.send(func.params);
+      this.LpReward.updatePool(pair, true);
+      this.LpReward.settlement(pair, address);
+      if (to != ZERO_ADDRESS) {
+        this.LpReward.settlement(pair, to);
+      }
+      const res = this.LpReward.sendLp(
+        pair,
+        address,
+        func.params.amount,
+        lastLp
+      );
+    } else if (func.func == FuncType.lock) {
+      const { address, tick, amount } = func.params;
+      this.assets.convert(address, tick, amount, "swap", "lock");
+      out = { id: func.id };
+    } else if (func.func == FuncType.unlock) {
+      const { address, tick, amount } = func.params;
+      this.assets.convert(address, tick, amount, "lock", "swap");
+      out = { id: func.id };
     }
     const result = this.getCurResult(func);
-    return { func: func.func, preResult, result, out, gas } as ContractResult;
+    return {
+      func: func.func,
+      preResult,
+      result,
+      out,
+      gas,
+      success: true,
+    } as ContractResult;
   }
 
   getCurResult(func: InternalFunc) {
@@ -281,9 +440,15 @@ export class Space {
     const { feeTo } = this.contract.config;
     const { gas_tick, gas_to } = env.ModuleInitParams;
 
-    const getBalance = (address: string, tick: string) => {
+    const getSwapBalance = (address: string, tick: string) => {
       return this.assets.getAggregateBalance(address, tick, [
         "swap",
+        // "pendingSwap",
+      ]);
+    };
+    const getLockBalance = (address: string, tick: string) => {
+      return this.assets.getAggregateBalance(address, tick, [
+        "lock",
         // "pendingSwap",
       ]);
     };
@@ -296,30 +461,34 @@ export class Space {
           {
             address: address,
             tick: gas_tick,
-            balance: getBalance(address, gas_tick),
+            balance: getSwapBalance(address, gas_tick),
+            lockedBalance: getLockBalance(address, gas_tick),
           },
           {
             address: address,
             tick: pair,
-            balance: getBalance(address, pair),
+            balance: getSwapBalance(address, pair),
+            lockedBalance: getLockBalance(address, pair),
           },
           {
             address: feeTo,
             tick: pair,
-            balance: getBalance(feeTo, pair),
+            balance: getSwapBalance(feeTo, pair),
+            lockedBalance: getLockBalance(feeTo, pair),
           },
           {
             address: gas_to,
             tick: gas_tick,
-            balance: getBalance(gas_to, gas_tick),
+            balance: getSwapBalance(gas_to, gas_tick),
+            lockedBalance: getLockBalance(gas_to, gas_tick),
           },
         ],
         pools: [
           {
             pair,
-            reserve0: getBalance(pair, tick0),
-            reserve1: getBalance(pair, tick1),
-            lp: this.assets.get(pair)?.Supply || "0",
+            reserve0: getSwapBalance(pair, tick0),
+            reserve1: getSwapBalance(pair, tick1),
+            lp: this.assets.getSwapSupply(pair),
           },
         ],
       };
@@ -328,7 +497,8 @@ export class Space {
         ret.users.push({
           address,
           tick,
-          balance: getBalance(address, tick),
+          balance: getSwapBalance(address, tick),
+          lockedBalance: getLockBalance(address, tick),
         });
       }
       return ret;
@@ -346,6 +516,14 @@ export class Space {
       const { address, tickIn, tickOut } = func.params;
       const pair = getPairStrV2(tickIn, tickOut);
       result = getPartialResult(address, pair);
+    } else if (func.func == FuncType.lock) {
+      const { address, tick } = func.params;
+      const pair = tick;
+      result = getPartialResult(address, pair);
+    } else if (func.func == FuncType.unlock) {
+      const { address, tick } = func.params;
+      const pair = tick;
+      result = getPartialResult(address, pair);
     } else if (func.func == FuncType.decreaseApproval) {
       const { address, tick } = func.params;
       result = {
@@ -353,17 +531,20 @@ export class Space {
           {
             address: address,
             tick: gas_tick,
-            balance: getBalance(address, gas_tick),
+            balance: getSwapBalance(address, gas_tick),
+            lockedBalance: getLockBalance(address, gas_tick),
           },
           {
             address,
             tick,
-            balance: getBalance(address, tick),
+            balance: getSwapBalance(address, tick),
+            lockedBalance: getLockBalance(address, tick),
           },
           {
             address: gas_to,
             tick: gas_tick,
-            balance: getBalance(gas_to, gas_tick),
+            balance: getSwapBalance(gas_to, gas_tick),
+            lockedBalance: getLockBalance(gas_to, gas_tick),
           },
         ],
       };
@@ -374,36 +555,84 @@ export class Space {
           {
             address: address,
             tick: gas_tick,
-            balance: getBalance(address, gas_tick),
+            balance: getSwapBalance(address, gas_tick),
+            lockedBalance: getLockBalance(address, gas_tick),
           },
           {
             address,
             tick,
-            balance: getBalance(address, tick),
+            balance: getSwapBalance(address, tick),
+            lockedBalance: getLockBalance(address, tick),
           },
           {
             address: gas_to,
             tick: gas_tick,
-            balance: getBalance(gas_to, gas_tick),
+            balance: getSwapBalance(gas_to, gas_tick),
+            lockedBalance: getLockBalance(gas_to, gas_tick),
           },
           {
             address: to,
             tick: gas_tick,
-            balance: getBalance(to, gas_tick),
+            balance: getSwapBalance(to, gas_tick),
+            lockedBalance: getLockBalance(to, gas_tick),
           },
           {
             address: to,
             tick,
-            balance: getBalance(to, tick),
+            balance: getSwapBalance(to, tick),
+            lockedBalance: getLockBalance(to, tick),
           },
         ],
       };
+    } else if (func.func == FuncType.sendLp) {
+      const { address, tick, to } = func.params;
+
+      result = {
+        users: [
+          {
+            address: address,
+            tick: gas_tick,
+            balance: getSwapBalance(address, gas_tick),
+            lockedBalance: getLockBalance(address, gas_tick),
+          },
+          {
+            address,
+            tick,
+            balance: getSwapBalance(address, tick),
+            lockedBalance: getLockBalance(address, tick),
+          },
+          {
+            address: gas_to,
+            tick: gas_tick,
+            balance: getSwapBalance(gas_to, gas_tick),
+            lockedBalance: getLockBalance(gas_to, gas_tick),
+          },
+          {
+            address: to,
+            tick: gas_tick,
+            balance: getSwapBalance(to, gas_tick),
+            lockedBalance: getLockBalance(to, gas_tick),
+          },
+          {
+            address: to,
+            tick,
+            balance: getSwapBalance(to, tick),
+            lockedBalance: getLockBalance(to, tick),
+          },
+        ],
+        pools: [],
+      };
+
+      const result2 = getPartialResult(address, tick);
+      result.users = result.users.concat(result2.users);
+      result.pools = result.pools.concat(result2.pools);
     }
     return convertResultToDecimal(result);
   }
 
   private /** @note must sync */ __handleOpEvent(
-    event: OpEvent
+    event: OpEvent,
+    skipInvalid = false
   ): ContractResult[] {
     let ret: ContractResult[] = null;
     if (event.event == EventType.transfer) {
@@ -451,7 +680,15 @@ export class Space {
       for (let i = 0; i < op.data.length; i++) {
         const func = convertFuncInscription2Internal(i, op, height);
         try {
-          ret.push(this.aggregate(func, gasPrice, height));
+          ret.push(
+            this.aggregate({
+              func,
+              gasPrice,
+              height,
+              skipInvalid,
+              swapFeeRate: op.swap_fee_rate,
+            })
+          );
         } catch (err) {
           logger.error({
             tag: TAG,
@@ -531,7 +768,8 @@ export class Space {
 
   handleEvent(
     event: OpEvent,
-    processing: AssetProcessing = null
+    processing: AssetProcessing = null,
+    skipInvalid = false
   ): ContractResult[] {
     this.checkAndUpdateEventCoherence(event);
     if (this.spaceType !== SpaceType.pending) {
@@ -549,7 +787,7 @@ export class Space {
       // process data
       this.notifyDataCollector?.setAssetProcessing(processing);
       this.updatePending(); // when inscribe approve, the balance may has not been converted yet
-      ret = this.__handleOpEvent(event);
+      ret = this.__handleOpEvent(event, skipInvalid);
       this.updatePending(); // maybe need to convert the balance immediately
       this.notifyDataCollector?.setAssetProcessing(null);
     }
@@ -557,7 +795,27 @@ export class Space {
     return ret;
   }
 
-  getBalance(address: string, tick: string): AddressBalance {
+  getLpBalance(address: string, pair: string): AddressLpBalance {
+    try {
+      return {
+        swap: bnDecimal(
+          this.assets.getBalance(address, pair, "swap"),
+          LP_DECIMAL
+        ),
+        lock: bnDecimal(
+          this.assets.getBalance(address, pair, "lock"),
+          LP_DECIMAL
+        ),
+      };
+    } catch (err) {
+      return {
+        swap: "0",
+        lock: "0",
+      };
+    }
+  }
+
+  getTickBalance(address: string, tick: string): AddressTickBalance {
     try {
       checkTick(tick);
       return {
@@ -592,70 +850,75 @@ export class Space {
     }
   }
 
-  partialClone(address: string, tick: string) {
-    need(!!tick);
-    let tick0: string;
-    let tick1: string;
-    let tickIsLp = isLp(tick);
-    if (tickIsLp) {
-      const res = getPairStructV2(tick);
-      tick0 = res.tick0;
-      tick1 = res.tick1;
-    }
+  partialClone(addresses: string[], reqTicks: string[]) {
+    const fullAssets = this.assets.dataRefer();
+    const partialAssets: SnapshotObj["assets"] = {};
 
-    const map = this.assets.dataRefer();
-    const assets: SnapshotObj["assets"] = {};
+    reqTicks.forEach((reqTick) => {
+      need(!!reqTick);
+      const reqTickIsLp = isLp(reqTick);
+      const tickList = [];
+      if (reqTickIsLp) {
+        const res = getPairStructV2(reqTick);
+        tickList.push(res.tick0);
+        tickList.push(res.tick1);
+        tickList.push(reqTick);
+      } else {
+        tickList.push(reqTick);
+      }
 
-    const list = [tick];
-    if (tick0) {
-      list.push(tick0);
-      list.push(tick1);
-    }
-    if (!list.includes(env.ModuleInitParams.gas_tick)) {
-      list.push(env.ModuleInitParams.gas_tick);
-    }
+      if (!tickList.includes(env.ModuleInitParams.gas_tick)) {
+        tickList.push(env.ModuleInitParams.gas_tick);
+      }
 
-    const { fee_to, gas_to } = env.ModuleInitParams;
-
-    for (const assetType in map) {
-      assets[assetType] = {};
-      list.forEach((item) => {
-        if (map[assetType][item]) {
-          assets[assetType][item] = new Brc20(
-            {},
-            item,
-            map[assetType][item].Supply,
-            assetType
-          );
-          assets[assetType][item].balance[address] =
-            map[assetType][item].balanceOf(address);
-
-          assets[assetType][item].balance[fee_to] =
-            map[assetType][item].balanceOf(fee_to);
-          assets[assetType][item].balance[gas_to] =
-            map[assetType][item].balanceOf(gas_to);
-
-          // pool reserve
-          if (tickIsLp) {
-            if (item !== tick) {
-              assets[assetType][item].balance[tick] =
-                map[assetType][item].balanceOf(tick);
-            } else {
-              assets[assetType][item].balance = _.cloneDeep(
-                map[assetType][item].balance
+      const { fee_to, gas_to } = env.ModuleInitParams;
+      for (const assetType in fullAssets) {
+        if (!partialAssets[assetType]) {
+          partialAssets[assetType] = {};
+        }
+        tickList.forEach((tick) => {
+          if (fullAssets[assetType][tick]) {
+            if (!partialAssets[assetType][tick]) {
+              partialAssets[assetType][tick] = new Brc20(
+                {},
+                tick,
+                fullAssets[assetType][tick].Supply,
+                assetType
               );
             }
+
+            addresses.forEach((address) => {
+              partialAssets[assetType][tick].balance[address] =
+                fullAssets[assetType][tick].balanceOf(address);
+            });
+
+            partialAssets[assetType][tick].balance[fee_to] =
+              fullAssets[assetType][tick].balanceOf(fee_to);
+            partialAssets[assetType][tick].balance[gas_to] =
+              fullAssets[assetType][tick].balanceOf(gas_to);
+
+            // pool reserve
+            if (reqTickIsLp) {
+              partialAssets[assetType][tick].balance[reqTick] =
+                fullAssets[assetType][tick].balanceOf(reqTick);
+            }
           }
-        }
-      });
-    }
+        });
+      }
+    });
 
     const contractStatus = _.cloneDeep(this.contract.status);
 
     return new Space(
       {
-        assets,
+        assets: partialAssets,
         contractStatus,
+        lpReward: {
+          // poolMap: _.cloneDeep(this.lpReward.PoolMap),
+          // userMap: _.cloneDeep(this.lpReward.UserMap),
+          poolMap: {},
+          userMap: {},
+        },
         used: false,
       },
       this.contract.config,
@@ -671,6 +934,10 @@ export class Space {
     const ret = cloneSnapshot({
       assets: this.assets.dataRefer(),
       contractStatus: this.contract.status,
+      lpReward: {
+        poolMap: this.lpReward.PoolMap,
+        userMap: this.lpReward.UserMap,
+      },
       used: false,
     });
     const ht = Date.now() - startTime;

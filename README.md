@@ -1,11 +1,5 @@
 # brc20-swap api
 
-This project provides APIs related to brc20-swap, which serve as the backend interfaces for https://unisat.io/swap.
-
-With the private key of the sequencer, interactive operations can be conducted for aggregation and chaining.
-
-Otherwise, the on-chain data can be viewed in a read-only mode.
-
 ## Usage
 
 To use the brc20-swap project, follow these steps:

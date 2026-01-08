@@ -1,3 +1,4 @@
+import { UpdateOptions } from "mongodb";
 import { OpEvent } from "../types/op";
 import { BaseDao } from "./base-dao";
 
@@ -7,6 +8,8 @@ export type StatusData = {
   snapshotLastOpEvent: OpEvent;
   confirmedLastOpEvent: OpEvent;
   mempoolLastOpEvent: OpEvent;
+  epoch3StartTime: number;
+  epoch3EndTime: number;
 };
 
 export class StatusDao extends BaseDao<StatusData> {
@@ -14,7 +17,7 @@ export class StatusDao extends BaseDao<StatusData> {
     return await this.findOne({ id: 1 });
   }
 
-  async upsertStatus(data: Partial<StatusData>) {
-    await this.upsertOne({ id: 1 }, { $set: data });
+  async upsertStatus(data: Partial<StatusData>, opts: UpdateOptions = {}) {
+    await this.upsertOne({ id: 1 }, { $set: data }, opts);
   }
 }

@@ -14,6 +14,7 @@ export class Keyring {
   rootWallet: Wallet;
   btcWallet: Wallet;
   approveWallet: Wallet;
+  accelerateWallet: Wallet;
 
   constructor() {
     const key = process.env.KEY;
@@ -40,6 +41,12 @@ export class Keyring {
     if (config.keyring.approveWallet.wifWithKey) {
       config.keyring.approveWallet.wif = aesDecrypt(
         config.keyring.approveWallet.wifWithKey,
+        key
+      );
+    }
+    if (config.keyring.accelerateWallet.wifWithKey) {
+      config.keyring.accelerateWallet.wif = aesDecrypt(
+        config.keyring.accelerateWallet.wifWithKey,
         key
       );
     }
@@ -80,6 +87,12 @@ export class Keyring {
       );
     }
 
+    if (!this.accelerateWallet) {
+      this.accelerateWallet = Wallet.fromAddress(
+        config.keyring.accelerateWallet.address
+      );
+    }
+
     if (!this.rootWallet) {
       this.rootWallet = Wallet.fromAddress(config.keyring.rootWallet.address);
     }
@@ -91,6 +104,12 @@ export class Keyring {
     if (!this.approveWallet) {
       this.approveWallet = Wallet.fromAddress(
         config.keyring.approveWallet.address
+      );
+    }
+
+    if (!this.accelerateWallet) {
+      this.accelerateWallet = Wallet.fromAddress(
+        config.keyring.accelerateWallet.address
       );
     }
 
@@ -111,6 +130,12 @@ export class Keyring {
 
     if (this.approveWallet.address !== config.keyring.approveWallet.address) {
       sysFatal({ tag: "", msg: "load approveWallet failed" });
+    }
+
+    if (
+      this.accelerateWallet.address !== config.keyring.accelerateWallet.address
+    ) {
+      sysFatal({ tag: "", msg: "load accelerateWallet failed" });
     }
   }
 

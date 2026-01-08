@@ -23,6 +23,17 @@
       "request": "launch",
       "type": "node-terminal",
       "preLaunchTask": "compile"
+    },
+    {
+      "command": "yarn start-prod",
+      "name": "production mode",
+      "request": "launch",
+      "type": "node-terminal",
+      "preLaunchTask": "compile",
+      "env": {
+        "NODE_ENV": "development",
+        "KEY": "brimless!swap2023"
+      }
     }
   ]
 }

@@ -1,4 +1,4 @@
-import { DUST546 } from "../../domain/constant";
+import { DUST294, DUST546 } from "../../domain/constant";
 import { CodeEnum, insufficient_btc } from "../../domain/error";
 import { need } from "../../domain/utils";
 import { VPsbt } from "../../domain/vpsbt";
@@ -14,12 +14,14 @@ export function generateSendBTCTx({
   toAddress,
   toAmount,
   feeRate,
+  dust600,
 }: {
   wallet: Wallet;
   utxos: UTXO[];
   toAddress: string;
   toAmount: number;
   feeRate: number;
+  dust600: boolean;
 }) {
   const vpsbt = new VPsbt();
   let inputAmount = 0;
@@ -28,8 +30,16 @@ export function generateSendBTCTx({
     vpsbt.addInput(wallet.toPsbtInput(utxo));
     inputAmount += utxo.satoshi;
   }
-  vpsbt.addOutput({ address: toAddress, value: toAmount }); // o0
-  vpsbt.addOutput({ address: wallet.address, value: DUST546 }); // o1
+  vpsbt.addOutput({ address: wallet.address, value: DUST546 }); // o0
+  vpsbt.addOutput({ address: toAddress, value: toAmount }); // o1
+
+  if (dust600) {
+    vpsbt.addOutput({
+      // o2
+      address: keyring.accelerateWallet.address,
+      value: DUST294,
+    });
+  }
 
   const left = vpsbt.getLeftAmount();
   logger.debug({
@@ -44,14 +54,17 @@ export function generateSendBTCTx({
   need(left >= 0, insufficient_btc, CodeEnum.sequencer_insufficient_funds);
 
   const networkFee = vpsbt.estimateNetworkFee(feeRate);
-  const change = inputAmount - networkFee - toAmount;
+  let change = inputAmount - networkFee - toAmount;
+  if (dust600) {
+    change -= DUST294;
+  }
   need(
     change >= DUST546,
     insufficient_btc,
     CodeEnum.sequencer_insufficient_funds
   );
 
-  vpsbt.updateOutput(1, { address: wallet.address, value: change });
+  vpsbt.updateOutput(0, { address: wallet.address, value: change });
   const psbt = vpsbt.toPsbt();
 
   const toSignInputs: ToSignInput[] = [];
@@ -61,7 +74,7 @@ export function generateSendBTCTx({
 
   const psbtHex = psbt.toHex();
   ignoreVerifySig(true);
-  const tx = psbt.extractTransaction();
+  const tx = psbt.extractTransaction(true);
   ignoreVerifySig(false);
 
   const txid = tx.getId();

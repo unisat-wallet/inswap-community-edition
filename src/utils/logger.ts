@@ -56,7 +56,7 @@ export class DateLogger {
           const root = path.join(__dirname, `../../logs/${date}/`);
           const res = fs.existsSync(root);
           if (!res) {
-            fs.mkdirSync(root);
+            fs.mkdirSync(root, { recursive: true });
           }
           fs.appendFile(
             path.join(__dirname, `../../logs/${date}/${item.filename}.log`),

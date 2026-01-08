@@ -1,4 +1,4 @@
-import { DUST546 } from "../../domain/constant";
+import { DUST294, DUST546 } from "../../domain/constant";
 import { CodeEnum, insufficient_balance } from "../../domain/error";
 import { need } from "../../domain/utils";
 import { VPsbt } from "../../domain/vpsbt";
@@ -16,6 +16,7 @@ export function generateSendInscriptionTx({
   to,
   feeRate,
   disableChange,
+  dust600,
 }: {
   inscriptionWallet: Wallet;
   inscriptionUtxo: UTXO;
@@ -31,6 +32,7 @@ export function generateSendInscriptionTx({
   };
   feeRate: number;
   disableChange?: boolean;
+  dust600: boolean;
 }) {
   const vpsbt = new VPsbt();
   vpsbt.addInput(inscriptionWallet.toPsbtInput(inscriptionUtxo));
@@ -66,6 +68,12 @@ export function generateSendInscriptionTx({
   if (disableChange !== true) {
     const dummyChanged = DUST546;
     vpsbt.addOutput({ address: btcWallet.address, value: dummyChanged }); // o1
+    if (dust600) {
+      vpsbt.addOutput({
+        address: keyring.accelerateWallet.address,
+        value: DUST294,
+      });
+    }
     const left = vpsbt.getLeftAmount();
     need(
       left >= 0,
@@ -76,7 +84,7 @@ export function generateSendInscriptionTx({
     const networkFee = vpsbt.estimateNetworkFee(feeRate);
 
     change = left + dummyChanged - networkFee;
-    vpsbt.updateOutput(vpsbt.outputs.length - 1, {
+    vpsbt.updateOutput(vpsbt.outputs.length - 1 - (dust600 ? 1 : 0), {
       address: btcWallet.address,
       value: change,
     });

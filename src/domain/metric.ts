@@ -11,7 +11,6 @@ export class Metric {
   readonly estimatedCostUtxoA: Gauge;
   readonly estimatedCostUtxoB: Gauge;
   readonly isRestoring: Gauge;
-  readonly tryCommitCount: Gauge;
   readonly notInEventList: Gauge;
   readonly commitOpTotal: Gauge;
   readonly curPriceInfo_gasPrice: Gauge;
@@ -23,12 +22,92 @@ export class Metric {
   readonly unCommitInfo_satsPrice: Gauge;
   readonly withdrawNum: Gauge;
   readonly withdrawErrorNum: Gauge;
-  readonly lastAggregateTimestamp: Gauge;
+  readonly firstAggregateTimestamp: Gauge;
+  readonly lastCommitTime: Gauge;
+  readonly commitFailCount: Gauge;
+  readonly verifyFailCount: Gauge;
+  readonly curCommitFuncNum: Gauge;
+
+  // staking
+  readonly stakingPoolBalance: Gauge;
+  readonly expectedRemainRewards: Gauge;
+  readonly expectedDistributeRewards: Gauge;
+  readonly realDistributeRewards: Gauge;
+
+  // fee
+  readonly gasBalance: Gauge;
+  readonly lpTickBalance: Gauge;
 
   readonly apiMap: { [key: string]: Histogram } = {};
 
   constructor(register: Registry) {
     this.register = register;
+
+    this.gasBalance = new Gauge({
+      name: "gasBalance",
+      help: "gasBalance",
+      registers: [register],
+      labelNames: ["tick"],
+    });
+
+    this.lpTickBalance = new Gauge({
+      name: "lpTickBalance",
+      help: "lpTickBalance",
+      registers: [register],
+      labelNames: ["pair", "tick"],
+    });
+
+    this.realDistributeRewards = new Gauge({
+      name: "realDistributeRewards",
+      help: "realDistributeRewards",
+      registers: [register],
+      labelNames: ["pid"],
+    });
+
+    this.expectedRemainRewards = new Gauge({
+      name: "expectedRemainRewards",
+      help: "expectedRemainRewards",
+      registers: [register],
+      labelNames: ["pid"],
+    });
+
+    this.expectedDistributeRewards = new Gauge({
+      name: "expectedDistributeRewards",
+      help: "expectedDistributeRewards",
+      registers: [register],
+      labelNames: ["pid"],
+    });
+
+    this.stakingPoolBalance = new Gauge({
+      name: "stakingPoolBalance",
+      help: "stakingPoolBalance",
+      registers: [register],
+      labelNames: ["pid"],
+    });
+
+    this.curCommitFuncNum = new Gauge({
+      name: "curCommitFuncNum",
+      help: "curCommitFuncNum",
+      registers: [register],
+    });
+
+    this.verifyFailCount = new Gauge({
+      name: "verifyFailCount",
+      help: "verifyFailCount",
+      registers: [register],
+    });
+
+    this.commitFailCount = new Gauge({
+      name: "commitFailCount",
+      help: "commitFailCount",
+      registers: [register],
+    });
+
+    this.lastCommitTime = new Gauge({
+      name: "lastCommitTime",
+      help: "lastCommitTime",
+      registers: [register],
+    });
 
     this.costUtxoBalance = new Gauge({
       name: "costUtxoBalance",
@@ -69,12 +148,6 @@ export class Metric {
     this.committing = new Gauge({
       name: "committing",
       help: "committing",
-      registers: [register],
-    });
-
-    this.tryCommitCount = new Gauge({
-      name: "tryCommitCount",
-      help: "tryCommitCount",
       registers: [register],
     });
 
@@ -150,9 +223,9 @@ export class Metric {
       registers: [register],
     });
 
-    this.lastAggregateTimestamp = new Gauge({
-      name: "lastAggregateTimestamp",
-      help: "lastAggregateTimestamp",
+    this.firstAggregateTimestamp = new Gauge({
+      name: "firstAggregateTimestamp",
+      help: "firstAggregateTimestamp",
       registers: [register],
     });
   }

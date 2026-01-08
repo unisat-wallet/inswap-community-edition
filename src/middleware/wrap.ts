@@ -26,14 +26,14 @@ export function wrap(fastify: FastifyInstance) {
 
     let data = null;
 
-    if (!!payload?.code && !!payload?.msg) {
+    if (!!payload?.code && payload.msg !== undefined) {
       data = payload;
     } else if (payload?.openapi) {
       data = payload;
     } else if (res.statusCode == 200) {
       data = { code: 0, msg: "ok", data: payload };
 
-      record.payload = payload;
+      // record.payload = payload;
       logger.route(record);
     } else {
       data = {
@@ -86,8 +86,12 @@ export function wrap(fastify: FastifyInstance) {
     } else {
       record.stack = err.stack;
     }
-    const filter = "quote";
-    if (req.url.includes(filter)) {
+    if (
+      (req.url.includes("quote") ||
+        req.url.includes("config") ||
+        req.url.includes("history")) &&
+      data.code == 0
+    ) {
       // logger.info(record);
     } else {
       logger.route(record);

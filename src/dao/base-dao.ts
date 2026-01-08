@@ -4,6 +4,7 @@ import {
   Filter,
   FindOptions,
   IndexSpecification,
+  InsertOneOptions,
   UpdateFilter,
   UpdateOptions,
 } from "mongodb";
@@ -32,17 +33,22 @@ export class BaseDao<K extends object> {
     return this.db.count(this.tableName, filter);
   }
 
-  insert(data: K) {
-    // if (config.readonly) {
-    //   return;
-    // }
-    return this.db.insert(this.tableName, data);
+  // Fast estimated count for better performance
+  estimatedCount(filter: Filter<K>) {
+    return this.db.estimatedCount(this.tableName, filter);
+  }
+
+  insert(data: K, opts: InsertOneOptions = {}) {
+    if (config.readonly) {
+      return;
+    }
+    return this.db.insert(this.tableName, data, opts);
   }
 
   insertMany(data: K[], opts: BulkWriteOptions = {}) {
-    // if (config.readonly) {
-    //   return;
-    // }
+    if (config.readonly) {
+      return;
+    }
     return this.db.insertMany(this.tableName, data, opts);
   }
 
@@ -65,9 +71,9 @@ export class BaseDao<K extends object> {
     updateFilter: UpdateFilter<K>,
     opts: UpdateOptions = {}
   ) {
-    // if (config.readonly) {
-    //   return;
-    // }
+    if (config.readonly) {
+      return;
+    }
     return this.db.updateOne(this.tableName, findFilter, updateFilter, opts);
   }
 
@@ -76,9 +82,9 @@ export class BaseDao<K extends object> {
     updateFilter: UpdateFilter<K>,
     opts: UpdateOptions = {}
   ) {
-    // if (config.readonly) {
-    //   return;
-    // }
+    if (config.readonly) {
+      return;
+    }
     return this.db.updateMany(this.tableName, findFilter, updateFilter, opts);
   }
 
@@ -87,9 +93,9 @@ export class BaseDao<K extends object> {
     updateFilter: UpdateFilter<K>,
     opts: UpdateOptions = {}
   ) {
-    // if (config.readonly) {
-    //   return;
-    // }
+    if (config.readonly) {
+      return;
+    }
     return this.db.upsertOne(this.tableName, findFilter, updateFilter, opts);
   }
 

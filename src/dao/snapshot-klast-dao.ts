@@ -1,3 +1,4 @@
+import { UpdateOptions } from "mongodb";
 import { BaseDao } from "./base-dao";
 
 export type SnapshotKLastData = {
@@ -6,7 +7,7 @@ export type SnapshotKLastData = {
 };
 
 export class SnapshotKLastDao extends BaseDao<SnapshotKLastData> {
-  async upsertData(data: SnapshotKLastData) {
-    await this.upsertOne({ tick: data.tick }, { $set: data });
+  async upsertData(data: SnapshotKLastData, opts: UpdateOptions = {}) {
+    await this.upsertOne({ tick: data.tick }, { $set: data }, opts);
   }
 }

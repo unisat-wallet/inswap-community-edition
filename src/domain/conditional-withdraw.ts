@@ -39,7 +39,6 @@ import {
 import {
   checkAddressType,
   checkAmount,
-  estimateServerFee,
   filterDustUTXO,
   filterUnconfirmedUTXO,
   getConfirmedNum,
@@ -92,9 +91,9 @@ export class ConditionalWithdraw {
   }
 
   async init() {
-    this.lastCheckHeight = env.NewestHeight - 1;
+    this.lastCheckHeight = env.BestHeight - 1;
 
-    const res = await withdrawDao.findAll();
+    const res = await withdrawDao.find({ type: "conditional" });
     for (let i = 0; i < res.length; i++) {
       const item = res[i];
       this.orderIdMap[item.id] = item;
@@ -103,7 +102,7 @@ export class ConditionalWithdraw {
   }
 
   async tick() {
-    if (env.NewestHeight == this.lastCheckHeight) {
+    if (env.BestHeight == this.lastCheckHeight) {
       return;
     }
 
@@ -147,7 +146,7 @@ export class ConditionalWithdraw {
                 // done
                 // inscribePsbtObj.validateSignaturesOfAllInputs(validator);
                 // inscribePsbtObj.finalizeAllInputs();
-                const inscribeTx = inscribePsbtObj.extractTransaction();
+                const inscribeTx = inscribePsbtObj.extractTransaction(true);
                 const inscribeTxid = inscribeTx.getId();
                 await api.broadcast(inscribeTx.toHex());
 
@@ -156,7 +155,7 @@ export class ConditionalWithdraw {
                 });
                 signedApprovePsbtObj.validateSignaturesOfAllInputs(validator);
                 signedApprovePsbtObj.finalizeAllInputs();
-                const approveTx = signedApprovePsbtObj.extractTransaction();
+                const approveTx = signedApprovePsbtObj.extractTransaction(true);
                 const approveTxid = approveTx.getId();
                 await api.broadcast(approveTx.toHex());
 
@@ -237,14 +236,14 @@ export class ConditionalWithdraw {
         });
       }
     }
-    this.lastCheckHeight = env.NewestHeight;
+    this.lastCheckHeight = env.BestHeight;
   }
 
   async create(
     req: CreateConditionalWithdrawReq
   ): Promise<CreateConditionalWithdrawRes> {
     return await queue(this.mutex, async () => {
-      const { address, tick, amount, pubkey, ts } = req;
+      const { address, feeTick, tick, amount, pubkey, ts } = req;
 
       checkAddressType(address);
       checkAmount(amount, decimal.get(tick));
@@ -256,11 +255,10 @@ export class ConditionalWithdraw {
           tick,
           amount,
           ts,
+          feeTick,
         },
       };
-      const { signMsg, id, commitParent } = operator.getSignMsg(params);
-      const res = estimateServerFee(params);
-
+      const res = await operator.genPreRes(params);
       const userWallet = Wallet.fromAddress(address, pubkey);
       const utxos = filterUnconfirmedUTXO(
         filterDustUTXO(await api.addressUTXOs(address))
@@ -326,18 +324,16 @@ export class ConditionalWithdraw {
       const inscriptionId = _withdraw.inscriptionId;
       const networkFee = _withdraw.payAmount;
 
-      let limit =
-        config.whitelistTick[tick.toLowerCase()]?.withdrawLimit || "0";
+      let limit = config.whitelistTick[tick]?.withdrawLimit || "0";
       if (!config.openWhitelistTick) {
         limit = "0";
       }
       need(bn(amount).gte(limit), `${withdraw_limit}: ${limit}`);
 
       const ret: CreateConditionalWithdrawRes = {
-        id,
+        id: res.ids[0],
         paymentPsbt,
         approvePsbt,
-        signMsg,
         networkFee,
         ...res,
       };
@@ -353,11 +349,11 @@ export class ConditionalWithdraw {
         tick,
         amount,
         ts,
-        commitParent,
+        commitParent: operator.NewestCommitData.op.parent,
         op: JSON.stringify(op),
-        ...ret,
         testFail: TestFail,
         type: "conditional",
+        ...ret,
       };
 
       this.tmp[withdraw.id] = withdraw;
@@ -368,7 +364,15 @@ export class ConditionalWithdraw {
 
   async confirm(req: ConfirmDirectWithdrawReq): Promise<ConfirmWithdrawRes> {
     return await queue(this.mutex, async () => {
-      const { id, sig, paymentPsbt, approvePsbt } = req;
+      const {
+        id,
+        feeTick,
+        feeAmount,
+        feeTickPrice,
+        sigs,
+        paymentPsbt,
+        approvePsbt,
+      } = req;
       const withdraw = this.tmp[id];
       try {
         need(!!withdraw);
@@ -383,9 +387,7 @@ export class ConditionalWithdraw {
           CodeEnum.internal_api_error
         );
 
-        let limit =
-          config.whitelistTick[withdraw.tick.toLowerCase()]?.withdrawLimit ||
-          "0";
+        let limit = config.whitelistTick[withdraw.tick]?.withdrawLimit || "0";
         if (!config.openWhitelistTick) {
           limit = "0";
         }
@@ -398,7 +400,7 @@ export class ConditionalWithdraw {
         const paymentPsbtObj = Psbt.fromHex(paymentPsbt, { network });
         paymentPsbtObj.validateSignaturesOfAllInputs(validator);
         paymentPsbtObj.finalizeAllInputs();
-        const paymentTx = paymentPsbtObj.extractTransaction();
+        const paymentTx = paymentPsbtObj.extractTransaction(true);
         const paymentTxid = paymentTx.getId();
 
         const req: FuncReq = {
@@ -408,7 +410,10 @@ export class ConditionalWithdraw {
             tick,
             amount,
             ts,
-            sig,
+            feeTick,
+            feeAmount,
+            feeTickPrice,
+            sigs,
           },
         };
 
@@ -421,7 +426,6 @@ export class ConditionalWithdraw {
         // rollup
         await operator.aggregate(req);
 
-        withdraw.sig = sig;
         withdraw.signedApprovePsbt = approvePsbt;
         withdraw.signedPaymentPsbt = paymentPsbt;
         withdraw.paymentTxid = paymentTxid;
@@ -527,21 +531,11 @@ export class ConditionalWithdraw {
         id,
         paymentPsbt,
         approvePsbt,
-        signMsg: oldWithdraw.signMsg,
         networkFee,
-        bytesL1: oldWithdraw.bytesL1,
-        bytesL2: oldWithdraw.bytesL2,
-        feeRate: oldWithdraw.feeRate,
-        gasPrice: oldWithdraw.gasPrice,
-        serviceFeeL1: oldWithdraw.serviceFeeL1,
-        serviceFeeL2: oldWithdraw.serviceFeeL2,
-        unitUsdPriceL1: oldWithdraw.unitUsdPriceL1,
-        unitUsdPriceL2: oldWithdraw.unitUsdPriceL2,
-        serviceTickBalance: oldWithdraw.serviceTickBalance,
-        // rollUpTxid: oldWithdraw.rollUpTxid,
-        ...ret,
+
         type: "conditional",
-      };
+        ...ret,
+      } as any; // TOFIX
 
       this.tmp[withdraw.id] = withdraw;
 
@@ -567,7 +561,7 @@ export class ConditionalWithdraw {
         const paymentPsbtObj = Psbt.fromHex(paymentPsbt, { network });
         paymentPsbtObj.validateSignaturesOfAllInputs(validator);
         paymentPsbtObj.finalizeAllInputs();
-        const paymentTx = paymentPsbtObj.extractTransaction();
+        const paymentTx = paymentPsbtObj.extractTransaction(true);
         const paymentTxid = paymentTx.getId();
 
         // payment broadcast
@@ -671,7 +665,7 @@ export class ConditionalWithdraw {
       psbt.validateSignaturesOfAllInputs(validator);
       psbt.finalizeAllInputs();
 
-      const tx = psbt.extractTransaction();
+      const tx = psbt.extractTransaction(true);
       await api.broadcast(tx.toHex());
 
       withdraw.status = "pendingCancel";

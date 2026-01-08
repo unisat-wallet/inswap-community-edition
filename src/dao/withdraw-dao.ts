@@ -9,7 +9,7 @@ export type WithdrawStatus =
   | "completed"
   | "cancel";
 
-export type WithdrawType = "conditional" | "direct";
+export type WithdrawType = "conditional" | "direct" | "bridge";
 
 export type WithdrawData = {
   id: string;
@@ -26,14 +26,12 @@ export type WithdrawData = {
   ts: number;
 
   commitParent: string;
-  signMsg: string;
   paymentPsbt: string;
   approvePsbt: string;
   networkFee: number;
   inscriptionId: string;
   op: string;
 
-  sig?: string;
   signedPaymentPsbt?: string;
   signedInscribePsbt: string;
   signedApprovePsbt?: string;
@@ -49,9 +47,5 @@ export type WithdrawData = {
 export class WithdrawDao extends BaseDao<WithdrawData> {
   upsertData(data: WithdrawData) {
     return this.upsertOne({ id: data.id }, { $set: data });
-  }
-
-  findAll() {
-    return this.find({});
   }
 }

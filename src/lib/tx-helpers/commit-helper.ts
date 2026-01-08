@@ -1,3 +1,4 @@
+import { DUST294 } from "../../domain/constant";
 import { getModuleIdHex } from "../../domain/utils";
 import { UTXO } from "../../types/api";
 import { AddressType } from "../../types/domain";
@@ -46,9 +47,10 @@ export function generateCommitTxs({
     content,
     paymentUtxo: dummyUtxo,
     inscriptionValue,
+    dust600: true,
   });
   const fee = Math.ceil(virtualSize * feeRate);
-  const payAmount = fee + inscriptionValue;
+  const payAmount = fee + inscriptionValue + DUST294;
 
   // pay order
   const sendBTCTxResult = generateSendBTCTx({
@@ -57,11 +59,12 @@ export function generateCommitTxs({
     toAddress: payAddress,
     toAmount: payAmount,
     feeRate,
+    dust600: true,
   });
 
   const nextBtcUtxoA: UTXO = {
     txid: sendBTCTxResult.txid,
-    vout: 1,
+    vout: 0,
     satoshi: sendBTCTxResult.change,
     scriptPk: btcWallet.scriptPk,
     codeType: btcWallet.addressType,
@@ -74,11 +77,12 @@ export function generateCommitTxs({
     toAddress: sequencerWallet.address,
     paymentUtxo: {
       txid: sendBTCTxResult.txid,
-      vout: 0,
+      vout: 1,
       satoshi: payAmount,
       codeType: AddressType.P2TR,
     },
     inscriptionValue,
+    dust600: true,
   });
 
   // sendInscription
@@ -102,6 +106,7 @@ export function generateCommitTxs({
       opreturnData: [getModuleIdHex()],
     },
     feeRate,
+    dust600: true,
   });
 
   const nextSeqUtxo: UTXO = {

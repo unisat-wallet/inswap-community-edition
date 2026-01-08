@@ -22,17 +22,23 @@ import {
   RemoveLiqOut,
   SwapOut,
 } from "../types/func";
-import {} from "../types/global";
 import { CommitOp, OpEvent, OpType } from "../types/op";
 import { PsbtInputExtended } from "../types/psbt";
-import { FeeRes, FuncReq } from "../types/route";
-import { DUST330, DUST546, LP_DECIMAL, UNCONFIRM_HEIGHT } from "./constant";
-import { convertReq2Arr } from "./convert-struct";
+import { BatchFuncReq, FuncReq, NetworkType, PayType } from "../types/route";
 import {
+  DUST330,
+  DUST546,
+  LP_DECIMAL,
+  QUOTA_ASSETS,
+  UNCONFIRM_HEIGHT,
+  ZERO_ADDRESS,
+} from "./constant";
+import {
+  access_denied,
   CodeEnum,
   CodeError,
-  access_denied,
   deposit_delay_swap,
+  fee_tick_invalid,
   internal_server_error,
   invalid_address,
   invalid_aggregation,
@@ -40,9 +46,26 @@ import {
   invalid_slippage,
   invalid_ts,
   not_support_address,
+  paramsMissing,
   tick_disable,
   utxo_not_enough,
+  invalid_time_uint,
+  invalid_lock_day,
 } from "./error";
+import bitcore from "bitcore-lib";
+import _ from "lodash";
+import { Brc20 } from "../contract/brc20";
+import {
+  getPairStructV2,
+  getPairStrV1,
+  getPairStrV2,
+  sortTickParams,
+} from "../contract/contract-utils";
+import { RecordApproveData } from "../dao/record-approve-dao";
+import { RecordGasData } from "../dao/record-gas-dao";
+import { RecordSendData } from "../dao/record-send-dao";
+import { toXOnly } from "../lib/bitcoin";
+import { Space } from "./space";
 
 const TAG = "utils";
 
@@ -84,7 +107,7 @@ export function heightConfirmNum(height: number) {
   if (height == UNCONFIRM_HEIGHT) {
     return 0;
   } else {
-    return Math.max(0, env.NewestHeight - height + 1);
+    return Math.max(0, env.BestHeight - height + 1);
   }
 }
 
@@ -117,6 +140,11 @@ export const validator = (
 /**
  * Create an record into database
  */
+let lastRecordParams: {
+  rollupInscriptionId: string;
+  item: InternalFunc;
+  res: ContractResult;
+};
 export async function record(
   rollupInscriptionId: string,
   item: InternalFunc,
@@ -126,30 +154,67 @@ export async function record(
     {} as any;
   item.params = sortTickParams(item.params);
 
+  delete ret.preResult;
+  delete ret.result;
   if (item.func == FuncType.deployPool) {
-    const gasRecord: RecordGasData = {
-      id: item.id,
-      address: item.params.address,
-      funcType: FuncType.deployPool,
-      tickA: item.params.tick0,
-      tickB: item.params.tick1,
-      gas: res.gas,
-      ts: item.ts,
-    };
-    await recordGasDao.upsertData(gasRecord);
+    if (parseFloat(res.gas) > 0) {
+      const gasRecord: RecordGasData = {
+        id: item.id,
+        address: item.params.address,
+        funcType: FuncType.deployPool,
+        tickA: item.params.tick0,
+        tickB: item.params.tick1,
+        gas: res.gas,
+        tick: env.ModuleInitParams.gas_tick,
+        ts: item.ts,
+        success: res.success,
+      };
+      await recordGasDao.upsertData(gasRecord);
+    }
   } else if (item.func == FuncType.addLiq) {
-    const gasRecord: RecordGasData = {
-      id: item.id,
-      address: item.params.address,
-      funcType: FuncType.addLiq,
-      tickA: item.params.tick0,
-      tickB: item.params.tick1,
-      gas: res.gas,
-      ts: item.ts,
-    };
-    await recordGasDao.upsertData(gasRecord);
+    if (parseFloat(res.gas) > 0) {
+      const gasRecord: RecordGasData = {
+        id: item.id,
+        address: item.params.address,
+        funcType: FuncType.addLiq,
+        tickA: item.params.tick0,
+        tickB: item.params.tick1,
+        gas: res.gas,
+        tick: env.ModuleInitParams.gas_tick,
+        ts: item.ts,
+        success: res.success,
+      };
+      await recordGasDao.upsertData(gasRecord);
+    }
 
     const out = res.out as AddLiqOut;
+    let value = 0;
+    let tick0Price = 0;
+    let tick1Price = 0;
+    try {
+      tick0Price = await query.getTickPrice(item.params.tick0);
+      tick1Price = await query.getTickPrice(item.params.tick1);
+      const tick0Amount = bnDecimal(
+        out.amount0,
+        decimal.get(item.params.tick0)
+      );
+      const tick1Amount = bnDecimal(
+        out.amount1,
+        decimal.get(item.params.tick1)
+      );
+      // tick0Price * tick0Amount + tick1Price * tick1Amount
+      const tick0Value = decimalCal([tick0Price, "mul", tick0Amount]);
+      const tick1Value = decimalCal([tick1Price, "mul", tick1Amount]);
+      value = parseFloat(decimalCal([tick0Value, "add", tick1Value]));
+    } catch (err) {
+      logger.error({
+        tag: TAG,
+        msg: "record addLiq error",
+        error: err.message,
+        stack: err.stack,
+      });
+    }
+
     ret = {
       id: item.id,
       rollupInscriptionId,
@@ -163,19 +228,42 @@ export async function record(
       ts: item.ts,
       preResult: res.preResult,
       result: res.result,
+      success: res.success,
+      value,
     };
+    if (!value) {
+      delete ret.value;
+    }
+    if (config.lpExceptionValue && value > config.lpExceptionValue) {
+      logger.error({
+        tag: TAG,
+        msg: "record addLiq error",
+        value,
+        tick0: item.params.tick0,
+        tick1: item.params.tick1,
+        amount0: bnDecimal(out.amount0, decimal.get(item.params.tick0)),
+        amount1: bnDecimal(out.amount1, decimal.get(item.params.tick1)),
+        tick0Price,
+        tick1Price,
+      });
+    }
+
     await recordLiqDao.upsertData(ret);
   } else if (item.func == FuncType.swap) {
-    const gasRecord: RecordGasData = {
-      id: item.id,
-      address: item.params.address,
-      funcType: FuncType.swap,
-      tickA: item.params.tickIn,
-      tickB: item.params.tickOut,
-      gas: res.gas,
-      ts: item.ts,
-    };
-    await recordGasDao.upsertData(gasRecord);
+    if (parseFloat(res.gas) > 0) {
+      const gasRecord: RecordGasData = {
+        id: item.id,
+        address: item.params.address,
+        funcType: FuncType.swap,
+        tickA: item.params.tickIn,
+        tickB: item.params.tickOut,
+        gas: res.gas,
+        tick: env.ModuleInitParams.gas_tick,
+        ts: item.ts,
+        success: res.success,
+      };
+      await recordGasDao.upsertData(gasRecord);
+    }
 
     const out = res.out as SwapOut;
     ret = {
@@ -196,23 +284,91 @@ export async function record(
       ts: item.ts,
       preResult: res.preResult,
       result: res.result,
+      success: res.success,
+      value: 0,
     };
     ret.amountIn = bnDecimal(ret.amountIn, decimal.get(ret.tickIn));
     ret.amountOut = bnDecimal(ret.amountOut, decimal.get(ret.tickOut));
+    let tickInPrice = 0;
+    let tickOutPrice = 0;
+    try {
+      tickInPrice = await query.getTickPrice(item.params.tickIn);
+      tickOutPrice = await query.getTickPrice(item.params.tickOut);
+      const value0 = parseFloat(decimalCal([tickInPrice, "mul", ret.amountIn]));
+      const value1 = parseFloat(
+        decimalCal([tickOutPrice, "mul", ret.amountOut])
+      );
+      ret.value = Math.min(value0, value1);
+    } catch (err) {
+      logger.error({
+        tag: TAG,
+        msg: "record swap error",
+        error: err.message,
+        stack: err.stack,
+      });
+    }
+    if (config.swapExceptionValue && ret.value > config.swapExceptionValue) {
+      logger.error({
+        tag: TAG,
+        msg: "record swap error",
+        value: ret.value,
+        tickIn: item.params.tickIn,
+        tickOut: item.params.tickOut,
+        tickInPrice,
+        tickOutPrice,
+        amountIn: ret.amountIn,
+        amountOut: ret.amountOut,
+      });
+    }
+
     await recordSwapDao.upsertData(ret);
   } else if (item.func == FuncType.removeLiq) {
-    const gasRecord: RecordGasData = {
-      id: item.id,
-      address: item.params.address,
-      funcType: FuncType.removeLiq,
-      tickA: item.params.tick0,
-      tickB: item.params.tick1,
-      gas: res.gas,
-      ts: item.ts,
-    };
-    await recordGasDao.upsertData(gasRecord);
-
+    if (parseFloat(res.gas) > 0) {
+      const gasRecord: RecordGasData = {
+        id: item.id,
+        address: item.params.address,
+        funcType: FuncType.removeLiq,
+        tickA: item.params.tick0,
+        tickB: item.params.tick1,
+        gas: res.gas,
+        tick: env.ModuleInitParams.gas_tick,
+        ts: item.ts,
+        success: res.success,
+      };
+      await recordGasDao.upsertData(gasRecord);
+    }
     const out = res.out as RemoveLiqOut;
+
+    let value = 0;
+    let tick0Price = 0;
+    let tick1Price = 0;
+    try {
+      tick0Price = await query.getTickPrice(item.params.tick0);
+      tick1Price = await query.getTickPrice(item.params.tick1);
+      const tick0Amount = bnDecimal(
+        out.amount0,
+        decimal.get(item.params.tick0)
+      );
+      const tick1Amount = bnDecimal(
+        out.amount1,
+        decimal.get(item.params.tick1)
+      );
+      // tick0Price * tick0Amount + tick1Price * tick1Amount
+      const tick0Value = decimalCal([tick0Price, "mul", tick0Amount]);
+      const tick1Value = decimalCal([tick1Price, "mul", tick1Amount]);
+      value = parseFloat(decimalCal([tick0Value, "add", tick1Value]));
+
+      const reward0Value = decimalCal([tick0Price, "mul", bn(out.reward0)]);
+      const reward1Value = decimalCal([tick1Price, "mul", bn(out.reward1)]);
+    } catch (err) {
+      logger.error({
+        tag: TAG,
+        msg: "record removeLiq error",
+        message: err.message,
+        stack: err.stack,
+      });
+    }
+
     ret = {
       id: item.id,
       rollupInscriptionId,
@@ -226,19 +382,56 @@ export async function record(
       ts: item.ts,
       preResult: res.preResult,
       result: res.result,
+      reward0: out.reward0,
+      reward1: out.reward1,
+      success: res.success,
+      value,
     };
+    if (!value) {
+      delete ret.value;
+    }
+    if (config.lpExceptionValue && value > config.lpExceptionValue) {
+      logger.error({
+        tag: TAG,
+        msg: "record removeLiq error",
+        value,
+        tick0: item.params.tick0,
+        tick1: item.params.tick1,
+        amount0: bnDecimal(out.amount0, decimal.get(item.params.tick0)),
+        amount1: bnDecimal(out.amount1, decimal.get(item.params.tick1)),
+        tick0Price,
+        tick1Price,
+      });
+    }
     await recordLiqDao.upsertData(ret);
+
+    if (bn(out.reward0).gt(0) && bn(out.reward1).gt(0)) {
+      await lpRewardHistoryDao.upsertData({
+        id: ret.id,
+        type: "lp-reward",
+        address: ret.address,
+        tick0: ret.tick0,
+        tick1: ret.tick1,
+        reward0: out.reward0,
+        reward1: out.reward1,
+        ts: ret.ts,
+      });
+    }
   } else if (item.func == FuncType.decreaseApproval) {
-    const gasRecord: RecordGasData = {
-      id: item.id,
-      address: item.params.address,
-      funcType: FuncType.decreaseApproval,
-      tickA: item.params.tick,
-      tickB: null,
-      gas: res.gas,
-      ts: item.ts,
-    };
-    await recordGasDao.upsertData(gasRecord);
+    if (parseFloat(res.gas) > 0) {
+      const gasRecord: RecordGasData = {
+        id: item.id,
+        address: item.params.address,
+        funcType: FuncType.decreaseApproval,
+        tickA: item.params.tick,
+        tickB: null,
+        gas: res.gas,
+        tick: env.ModuleInitParams.gas_tick,
+        ts: item.ts,
+        success: res.success,
+      };
+      await recordGasDao.upsertData(gasRecord);
+    }
 
     ret = {
       id: item.id,
@@ -250,35 +443,160 @@ export async function record(
       ts: item.ts,
       preResult: res.preResult,
       result: res.result,
+      success: res.success,
     };
     await recordApproveDao.upsertData(ret);
-  } else if (item.func == FuncType.send) {
-    const gasRecord: RecordGasData = {
-      id: item.id,
-      address: item.params.address,
-      funcType: FuncType.send,
-      tickA: item.params.tick,
-      tickB: null,
-      gas: res.gas,
-      ts: item.ts,
-    };
-    await recordGasDao.upsertData(gasRecord);
+  } else if (item.func == FuncType.send || item.func == FuncType.sendLp) {
+    if (parseFloat(res.gas) > 0) {
+      if (item.func == FuncType.send) {
+        const gasRecord: RecordGasData = {
+          id: item.id,
+          address: item.params.address,
+          funcType: FuncType.send,
+          tickA: item.params.tick,
+          tickB: null,
+          gas: res.gas,
+          tick: env.ModuleInitParams.gas_tick,
+          ts: item.ts,
+          success: res.success,
+          to: item.params.to,
+        };
+        await recordGasDao.upsertData(gasRecord);
+      } else {
+        const { tick0, tick1 } = getPairStructV2(item.params.tick);
+        const gasRecord: RecordGasData = {
+          id: item.id,
+          address: item.params.address,
+          funcType: FuncType.sendLp,
+          tickA: tick0,
+          tickB: tick1,
+          gas: res.gas,
+          tick: env.ModuleInitParams.gas_tick,
+          ts: item.ts,
+          success: res.success,
+          to: item.params.to,
+        };
+        await recordGasDao.upsertData(gasRecord);
+      }
+    }
 
-    ret = {
-      id: item.id,
-      rollupInscriptionId,
-      address: item.params.address,
-      tick: item.params.tick,
-      amount: bnDecimal(item.params.amount, decimal.get(item.params.tick)),
-      to: item.params.to,
-      ts: item.ts,
-      preResult: res.preResult,
-      result: res.result,
-    };
-    await recordSendDao.upsertData(ret);
+    if (item.params.to == env.ModuleInitParams.gas_to) {
+      need(!!lastRecordParams);
+      let tickA: string;
+      let tickB: string;
+      let funcType = lastRecordParams.item.func;
+      if (lastRecordParams.item.func == FuncType.swap) {
+        tickA = lastRecordParams.item.params.tickIn;
+        tickB = lastRecordParams.item.params.tickOut;
+      } else if (
+        lastRecordParams.item.func == FuncType.addLiq ||
+        lastRecordParams.item.func == FuncType.removeLiq ||
+        lastRecordParams.item.func == FuncType.deployPool
+      ) {
+        tickA = lastRecordParams.item.params.tick0;
+        tickB = lastRecordParams.item.params.tick1;
+      } else if (
+        lastRecordParams.item.func == FuncType.decreaseApproval ||
+        lastRecordParams.item.func == FuncType.send
+      ) {
+        tickA = lastRecordParams.item.params.tick;
+        tickB = null;
+        if (stakePoolMgr.isPoolAddr(lastRecordParams.item.params.address)) {
+          funcType = FuncType.claim as any;
+        }
+      } else if (lastRecordParams.item.func == FuncType.sendLp) {
+        const { tick0, tick1 } = getPairStructV2(
+          lastRecordParams.item.params.tick
+        );
+        tickA = tick0;
+        tickB = tick1;
+      } else if (
+        lastRecordParams.item.func == FuncType.lock ||
+        lastRecordParams.item.func == FuncType.unlock
+      ) {
+        if (isLp(lastRecordParams.item.params.tick)) {
+          const { tick0, tick1 } = getPairStructV2(
+            lastRecordParams.item.params.tick
+          );
+          tickA = tick0;
+          tickB = tick1;
+        } else {
+          tickA = lastRecordParams.item.params.tick;
+          tickB = null;
+        }
+      }
+      const gasRecord: RecordGasData = {
+        id: lastRecordParams.item.id,
+        address: item.params.address,
+        funcType,
+        tickA,
+        tickB,
+        gas: bnDecimal(item.params.amount, decimal.get(item.params.tick)),
+        tick: item.params.tick,
+        ts: item.ts,
+        success: res.success,
+      };
+      await recordGasDao.upsertData(gasRecord);
+    } else {
+      const _isLp = isLp(item.params.tick);
+      let _decimal: string;
+      let tick: string;
+      if (_isLp) {
+        _decimal = LP_DECIMAL;
+        const { tick0, tick1 } = getPairStructV2(item.params.tick);
+        tick = getPairStrV1(tick0, tick1);
+      } else {
+        _decimal = decimal.get(item.params.tick);
+        tick = item.params.tick;
+      }
+      ret = {
+        id: item.id,
+        rollupInscriptionId,
+        address: item.params.address,
+        tick,
+        amount: bnDecimal(item.params.amount, _decimal),
+        to: item.params.to,
+        ts: item.ts,
+        preResult: res.preResult,
+        result: res.result,
+        success: res.success,
+      };
+      if (_isLp) {
+        ret.isLp = true;
+        const { tick0, tick1 } = getPairStructV2(item.params.tick);
+        let lpInfo:
+          | {
+              amount0: string;
+              amount1: string;
+              value: number;
+            }
+          | undefined;
+        try {
+          lpInfo = await getLpInfo({
+            tick0,
+            tick1,
+            lp: ret.amount,
+          });
+        } catch (e) {}
+        if (lpInfo) {
+          ret.sendLpResult = {
+            amount0: lpInfo.amount0,
+            amount1: lpInfo.amount1,
+            lp: ret.amount,
+            value: lpInfo.value,
+          };
+        }
+      }
+      await recordSendDao.upsertData(ret);
+    }
   }
-  delete ret.preResult;
-  delete ret.result;
+
+  lastRecordParams = {
+    rollupInscriptionId,
+    item,
+    res,
+  };
+
   return ret;
 }
 
@@ -300,75 +618,109 @@ export function getFuncInternalLength(func: InscriptionFunc) {
   return Buffer.from(JSON.stringify(func)).length;
 }
 
-/**
- * Estimate the sequencer service fee, there may be some deviation
- */
-export function estimateServerFee(req: FuncReq): FeeRes {
-  let sig: string;
-  const address = req.req.address;
-  checkAddressType(address);
-  if (getAddressType(address) == AddressType.P2TR) {
-    sig = "x".repeat(88);
-  } else if (getAddressType(address) == AddressType.P2WPKH) {
-    sig = "x".repeat(144); // deviation
+export function estimateServerFee(
+  req: FuncReq,
+  appendCostUsd?: number,
+  skipCheckFeeTick?: boolean
+): {
+  feeAmount: string;
+  feeTickPrice: string;
+  feeBalance: string;
+  usdPrice: string;
+} {
+  if (!skipCheckFeeTick) {
+    checkFeeTick(req.req.feeTick);
   }
-  const gasPrice = operator.NewestCommitData.op.gas_price;
-  const feeRate = env.FeeRate.toString();
-  const bytesL2 = Math.ceil(
-    getFuncInternalLength({
-      id: "x".repeat(64),
-      addr: req.req.address,
-      func: req.func,
-      params: convertReq2Arr(req).params,
-      ts: req.req.ts,
-      sig,
-    })
-  );
-  const bytesL1 = bytesL2 / 4 + 310;
 
-  const serviceTickBalance = operator.PendingSpace.getBalance(
+  const feeBalance = operator.PendingSpace.getTickBalance(
     req.req.address,
-    env.ModuleInitParams.gas_tick
+    req.req.feeTick
   ).swap;
 
-  if (env.NewestHeight < config.updateHeight1) {
-    return {
-      bytesL1,
-      bytesL2,
-      feeRate,
-      gasPrice,
-      serviceFeeL1: decimalCal([feeRate, "mul", bytesL1]),
-      serviceFeeL2: decimalCal([gasPrice, "mul", bytesL2]),
-      unitUsdPriceL1: env.SatsPrice,
-      unitUsdPriceL2: decimalCal([env.GasTickPrice, "mul", env.SatsPrice]),
-      serviceTickBalance,
-    };
+  let feeAmount: string;
+  let cost = 0;
+  if (config.fixedFeeAmount) {
+    feeAmount = config.fixedFeeAmount;
+    cost = parseFloat(
+      decimalCal([feeAmount, "mul", req.req.feeTickPrice], "6")
+    );
   } else {
-    return {
-      bytesL1,
-      bytesL2,
-      feeRate,
-      gasPrice,
-      serviceFeeL1: decimalCal([feeRate, "mul", bytesL1]),
-      serviceFeeL2: gasPrice,
-      unitUsdPriceL1: env.SatsPrice,
-      unitUsdPriceL2: decimalCal([env.GasTickPrice, "mul", env.SatsPrice]),
-      serviceTickBalance,
-    };
+    const feeRate = Math.max(config.minFeeRate, env.FeeRate * 2);
+    cost =
+      (400 / 4) /* Number of simulated bytes */ *
+      2 /** Number of transaction */ *
+      feeRate *
+      parseFloat(env.FbSatsPrice) *
+      config.userFeeRateRatio;
+    if (appendCostUsd > 0) {
+      cost += appendCostUsd;
+    }
+    need(parseFloat(req.req.feeTickPrice) > 0, "Fee tick price error");
+    feeAmount = decimalCal(
+      [cost, "div", req.req.feeTickPrice],
+      decimal.get(req.req.feeTick)
+    );
+    need(parseFloat(feeAmount) > 0, "Fee amount error");
   }
+
+  return {
+    feeBalance,
+    feeAmount,
+    feeTickPrice: req.req.feeTickPrice,
+    usdPrice: cost.toString(),
+  };
 }
 
-import _ from "lodash";
-import { Brc20 } from "../contract/brc20";
-import {
-  getPairStrV2,
-  getPairStructV2,
-  sortTickParams,
-} from "../contract/contract-utils";
-import { RecordApproveData } from "../dao/record-approve-dao";
-import { RecordGasData } from "../dao/record-gas-dao";
-import { RecordSendData } from "../dao/record-send-dao";
-import { toXOnly } from "../lib/bitcoin";
+export function estimateBatchServerFee(
+  req: BatchFuncReq,
+  appendCostUsd?: number
+): {
+  feeAmount: string;
+  feeTickPrice: string;
+  feeBalance: string;
+  usdPrice: string;
+} {
+  checkFeeTick(req.req.feeTick);
+
+  const feeBalance = operator.PendingSpace.getTickBalance(
+    req.req.address,
+    req.req.feeTick
+  ).swap;
+
+  let feeAmount: string;
+  let cost = 0;
+  if (config.fixedFeeAmount) {
+    feeAmount = config.fixedFeeAmount;
+    cost = parseFloat(
+      decimalCal([feeAmount, "mul", req.req.feeTickPrice], "6")
+    );
+  } else {
+    need(config.feeTicks.includes(req.req.feeTick), "Invalid fee tick");
+    const feeRate = Math.max(config.minFeeRate, env.FeeRate * 2);
+    cost =
+      (400 / 4) /* Number of simulated bytes */ *
+      (req.req.to.length + 1) /** Number of transaction */ *
+      feeRate *
+      parseFloat(env.FbSatsPrice) *
+      config.userFeeRateRatio;
+    if (appendCostUsd > 0) {
+      cost += appendCostUsd;
+    }
+    need(parseFloat(req.req.feeTickPrice) > 0, "Fee tick price error");
+    feeAmount = decimalCal(
+      [cost, "div", req.req.feeTickPrice],
+      decimal.get(req.req.feeTick)
+    );
+    need(parseFloat(feeAmount) > 0, "Fee amount error");
+  }
+
+  return {
+    feeBalance,
+    feeAmount,
+    feeTickPrice: req.req.feeTickPrice,
+    usdPrice: cost.toString(),
+  };
+}
 
 export const maxAmount = uintCal(["2", "pow", "64"]);
 
@@ -380,6 +732,14 @@ export function checkFuncReq(req: FuncReq) {
 
   checkAddressType(req.req.address);
   checkTs(req.req.ts);
+  checkFeeTick(req.req.feeTick);
+  need(!!req.req.payType, paramsMissing("payType"));
+  const allPayType = [PayType.tick, PayType.freeQuota, PayType.assetFeeTick];
+  // if (req.func == FuncType.swap || req.func == FuncType.send) {
+  //   // send fee
+  //   allPayType.push(PayType.assetFeeTick);
+  // }
+  need(allPayType.includes(req.req.payType));
   // need(!!req.req.sig, "invalid sig");
 
   if (func == FuncType.addLiq) {
@@ -420,6 +780,23 @@ export function checkFuncReq(req: FuncReq) {
     checkTick(tick);
     checkAmount(amount, decimal.get(tick));
     checkAddress(to);
+  } else if (func == FuncType.lock) {
+    const { tick0, tick1, amount } = req.req;
+    checkTick(tick0);
+    checkTick(tick1);
+    checkAmount(amount, LP_DECIMAL); //LP
+  } else if (func == FuncType.unlock) {
+    const { tick0, tick1, amount } = req.req;
+    checkTick(tick0);
+    checkTick(tick1);
+    checkAmount(amount, LP_DECIMAL); //LP
+  } else if (func == FuncType.sendLp) {
+    const { tick, amount, to } = req.req;
+    checkTick(tick);
+    checkAmount(amount, LP_DECIMAL);
+    checkAddress(to);
+  } else if (func == FuncType.claim) {
+    //
   } else {
     throw new CodeError(invalid_aggregation);
   }
@@ -480,6 +857,9 @@ export function sysFatal(
  * Check if an address is valid. (P2TR/P2WPKH)
  */
 export function checkAddressType(address: string) {
+  if (address == ZERO_ADDRESS) {
+    return;
+  }
   need(
     [AddressType.P2TR, AddressType.P2WPKH].includes(getAddressType(address)),
     not_support_address
@@ -491,6 +871,10 @@ export function checkTs(ts: number) {
   const gap = 600;
   // check 10.0
   need(now - ts > -gap && now - ts < gap && bnIsInteger(ts), invalid_ts);
+}
+
+export function checkFeeTick(tick: string) {
+  need(config.feeTicks.includes(tick), fee_tick_invalid);
 }
 
 export function checkAddress(address: string) {
@@ -512,6 +896,14 @@ export function checkSlippage(slippage: string) {
     invalid_slippage
   );
   need(slippage == bn(slippage).toString(), invalid_amount);
+}
+
+export function checkLockDay(lockDay: string) {
+  need(lockDay.slice(-1) === "d", invalid_lock_day);
+}
+
+export function checkTimeUint(timeUint: string) {
+  need(["d", "h", "m", "s"].includes(timeUint), invalid_time_uint);
 }
 
 /**
@@ -617,7 +1009,7 @@ export function getConfirmedNum(height: number) {
   if (height == UNCONFIRM_HEIGHT) {
     return 0;
   } else {
-    return env.NewestHeight - height + 1;
+    return Math.max(0, env.BestHeight - height + 1);
   }
 }
 
@@ -658,9 +1050,6 @@ export function utxoToInput(
 }
 
 export function isMatch(text: string, search: string) {
-  if (text.toLowerCase().includes("eyee")) {
-    return false;
-  }
   if (!search) {
     return true;
   }
@@ -669,7 +1058,7 @@ export function isMatch(text: string, search: string) {
 
 export function checkTick(tick: string) {
   if (config.openWhitelistTick) {
-    need(!!config.whitelistTick[tick.toLowerCase()], tick_disable);
+    need(!!config.whitelistTick[tick], tick_disable);
   }
 }
 
@@ -689,11 +1078,6 @@ export async function apiEventToOpEvent(item: ApiEvent, cursor: number) {
     data: item.data,
     event: item.type,
   };
-
-  // fix tick
-  if ((event.op as any).tick) {
-    (event.op as any).tick = decimal.getRealTick((event.op as any).tick);
-  }
 
   checkOpEvent(event);
 
@@ -744,6 +1128,12 @@ export async function apiEventToOpEvent(item: ApiEvent, cursor: number) {
   } else if (event.op.op == OpType.withdraw) {
     await decimal.trySetting(event.op.tick);
   }
+
+  // fix tick
+  if ((event.op as any).tick) {
+    (event.op as any).tick = decimal.getRealTick((event.op as any).tick);
+  }
+
   return event;
 }
 
@@ -767,9 +1157,17 @@ export async function checkAccess(address: string) {
   }
 }
 
-export async function getTickUsdPrice(tick: string, amount: string) {
-  const tickPrice = await api.tickPrice(tick);
-  return decimalCal([tickPrice, "mul", env.SatsPrice, "mul", amount]);
+export function isFreeFeeAddr(address: string) {
+  for (const pid in stakePoolMgr.poolMap) {
+    const wallet = stakePoolMgr.poolMap[pid].wallet;
+    if (wallet?.address == address) {
+      return true;
+    }
+  }
+  if (config.keyring.fbClaimWallet.address == address) {
+    return true;
+  }
+  return false;
 }
 
 export function filterDustUTXO(utxos: UTXO[]) {
@@ -829,10 +1227,12 @@ export function cloneSnapshot(snapshot: SnapshotObj) {
       pendingAvailable: {},
       approve: {},
       conditionalApprove: {},
+      lock: {},
     },
     contractStatus: {
       kLast: {},
     },
+    lpReward: _.cloneDeep(snapshot.lpReward),
     used: false,
   };
   for (const assetType in snapshot.assets) {
@@ -855,7 +1255,9 @@ export function cloneSnapshot(snapshot: SnapshotObj) {
 export async function getSnapshotObjFromDao() {
   const assetRes = await snapshotAssetDao.find({});
   const klastRes = await snapshotKLastDao.find({});
-  const suppltRes = await snapshotSupplyDao.find({});
+  const supplyRes = await snapshotSupplyDao.find({});
+  const lpRewardPoolRes = await snapshotLpRewardPoolDao.find({});
+  const lpRewardUserRes = await snapshotLpRewardUserDao.find({});
   const supplyMap = {
     swap: {},
     pendingSwap: {},
@@ -863,9 +1265,10 @@ export async function getSnapshotObjFromDao() {
     pendingAvailable: {},
     approve: {},
     conditionalApprove: {},
+    lock: {},
   };
-  for (let i = 0; i < suppltRes.length; i++) {
-    const item = suppltRes[i];
+  for (let i = 0; i < supplyRes.length; i++) {
+    const item = supplyRes[i];
     supplyMap[item.assetType][item.tick] = item.supply;
   }
 
@@ -877,9 +1280,14 @@ export async function getSnapshotObjFromDao() {
       pendingAvailable: {},
       approve: {},
       conditionalApprove: {},
+      lock: {},
     },
     contractStatus: {
       kLast: {},
+    },
+    lpReward: {
+      poolMap: {},
+      userMap: {},
     },
     used: false,
   };
@@ -900,5 +1308,247 @@ export async function getSnapshotObjFromDao() {
     const item = klastRes[i];
     snapshot.contractStatus.kLast[item.tick] = item.value;
   }
+  for (let i = 0; i < lpRewardPoolRes.length; i++) {
+    const item = lpRewardPoolRes[i];
+    snapshot.lpReward.poolMap[item.pair] = item;
+  }
+  for (let i = 0; i < lpRewardUserRes.length; i++) {
+    const item = lpRewardUserRes[i];
+    if (!snapshot.lpReward.userMap[item.pair]) {
+      snapshot.lpReward.userMap[item.pair] = {};
+    }
+    snapshot.lpReward.userMap[item.pair][item.address] = item;
+  }
   return snapshot;
 }
+
+export async function getSatsPrice() {
+  if (global.isFractal) {
+    // fb_sats / brc20_sats
+    const satsPrice = decimalCal(
+      [env.Brc20SatsPrice, "div", env.FbSatsPrice],
+      "18"
+    );
+    return satsPrice;
+  } else {
+    const satsPrice = decimalCal(
+      [env.Brc20SatsPrice, "div", env.BtcSatsPrice],
+      "18"
+    );
+    return satsPrice;
+  }
+}
+
+export function satsToBtc(sats: number) {
+  return sats / 100000000;
+}
+
+export function l1ToL2TickName(l1Tick: string) {
+  for (let i = 0; i < env.assetList.length; i++) {
+    const item = env.assetList[i];
+    if (item.l1Tick == l1Tick) {
+      return item.l2Tick;
+    }
+  }
+  return l1Tick;
+  // throw new Error("can not bridge: " + l1Tick);
+}
+
+export function l2ToL1TickName(l2Tick: string) {
+  for (let i = 0; i < env.assetList.length; i++) {
+    const item = env.assetList[i];
+    if (item.l2Tick == l2Tick) {
+      return item.l1Tick;
+    }
+  }
+  return l2Tick;
+  // throw new Error("can not bridge: " + l2Tick);
+}
+
+export function getL1NetworkType(tick: string) {
+  for (let i = 0; i < env.assetList.length; i++) {
+    const item = env.assetList[i];
+    if (item.l1Tick == tick || item.l2Tick == tick) {
+      return item.l1NetworkType;
+    }
+  }
+  return process.env.BITCOIN_NETWORK as NetworkType;
+}
+
+export function getL1AssetType(tick: string) {
+  for (let i = 0; i < env.assetList.length; i++) {
+    const item = env.assetList[i];
+    if (item.l1Tick == tick || item.l2Tick == tick) {
+      return item.l1AssetType;
+    }
+  }
+  return null;
+}
+
+export function getPoolLp(space: Space, pair: string) {
+  const assets = space.Assets;
+  const { tick0, tick1 } = getPairStructV2(pair);
+  const poolLp = uintCal([
+    assets.getSwapSupply(pair),
+    "add",
+    space.Contract.getFeeLp({ tick0, tick1 }), // LP are only minted when adding/removing liquidity, and this portion needs to be pre-accounted for.
+  ]);
+  return poolLp;
+}
+
+export async function getLpInfo(params: {
+  tick0: string;
+  tick1: string;
+  lp: string;
+}): Promise<{
+  amount0: string;
+  amount1: string;
+  value: number;
+}> {
+  const { tick0, tick1, lp } = params;
+  if (parseFloat(lp) <= 0) {
+    return { value: 0, amount0: "0", amount1: "0" };
+  }
+
+  const res = await operator.quoteRemoveLiq({
+    address: "",
+    tick0,
+    tick1,
+    lp,
+  });
+
+  const tick0Price = await query.getTickPrice(tick0);
+  const tick1Price = await query.getTickPrice(tick1);
+
+  const value0 = decimalCal(
+    [res.amount0, "mul", tick0Price],
+    decimal.get(tick0)
+  );
+  const value1 = decimalCal(
+    [res.amount1, "mul", tick1Price],
+    decimal.get(tick1)
+  );
+  let value = parseFloat(decimalCal([value0, "add", value1], "18"));
+
+  logger.debug({
+    tag: TAG,
+    msg: "quoteLpValue",
+    tick0,
+    tick1,
+    lp,
+    amount0: res.amount0,
+    amount1: res.amount1,
+    tick0Price,
+    tick1Price,
+    value0,
+    value1,
+    value,
+  });
+
+  if (config.lpExceptionValue && value > config.lpExceptionValue) {
+    if (QUOTA_ASSETS.includes(tick0) || QUOTA_ASSETS.includes(tick1)) {
+      logger.error({
+        tag: TAG,
+        msg: "quoteLpValue error",
+        tick0,
+        tick1,
+        lp,
+        amount0: res.amount0,
+        amount1: res.amount1,
+        tick0Price,
+        tick1Price,
+        value0,
+        value1,
+        value,
+      });
+    } else {
+      value = 0;
+    }
+  }
+
+  return {
+    amount0: res.amount0,
+    amount1: res.amount1,
+    value,
+  };
+}
+
+export function batchReqToReqs(req: BatchFuncReq): FuncReq[] {
+  const reqs: FuncReq[] = [];
+  for (let i = 0; i < req.req.to.length; i++) {
+    const item = req.req.to[i];
+
+    // Construct the base request object, excluding the amountList.
+    const baseReq = {
+      address: req.req.address,
+      tick: req.req.tick,
+      feeTick: req.req.feeTick,
+      feeTickPrice: req.req.feeTickPrice,
+      ts: req.req.ts,
+      payType: req.req.payType,
+      rememberPayType: req.req.rememberPayType,
+      checkBalance: req.req.checkBalance,
+      sigs: req.req.sigs,
+    };
+
+    if (i == req.req.to.length - 1) {
+      const funcReq: FuncReq = {
+        func: req.func,
+        req: {
+          ...baseReq,
+          to: item,
+          amount: req.req.amountList ? req.req.amountList[i] : req.req.amount,
+          feeAmount: req.req.feeAmount,
+        },
+      };
+      checkFuncReq(funcReq);
+      reqs.push(funcReq);
+    } else {
+      const funcReq: FuncReq = {
+        func: req.func,
+        req: {
+          ...baseReq,
+          to: item,
+          amount: req.req.amountList ? req.req.amountList[i] : req.req.amount,
+          feeAmount: "0", // no fee for batch
+        },
+      };
+      checkFuncReq(funcReq);
+      reqs.push(funcReq);
+    }
+  }
+  return reqs;
+}
+export const verifyMessage = (
+  address: string,
+  publicKey: string,
+  text: string,
+  sig: string
+) => {
+  const message = new bitcore.Message(text);
+
+  let signature = bitcore.crypto.Signature.fromCompact(
+    Buffer.from(sig, "base64")
+  );
+  let hash = message.magicHash();
+
+  // recover the public key
+  let ecdsa = new bitcore.crypto.ECDSA();
+  ecdsa.hashbuf = hash;
+  ecdsa.sig = signature;
+
+  const pubkeyInSig = ecdsa.toPublicKey();
+
+  const pubkeyInSigString = new bitcore.PublicKey(
+    Object.assign({}, pubkeyInSig.toObject(), { compressed: true })
+  ).toString();
+  if (pubkeyInSigString != publicKey) {
+    throw new Error("publicKey error");
+  }
+
+  const success = bitcore.crypto.ECDSA.verify(hash, signature, pubkeyInSig);
+  if (!success) {
+    throw new Error("sign error");
+  }
+  return true;
+};

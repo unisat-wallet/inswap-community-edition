@@ -1,5 +1,5 @@
 import { CommitOp } from "../types/op";
-import { getConfirmedNum, need, sysFatal } from "./utils";
+import { getConfirmedNum, need, satsToBtc, sysFatal } from "./utils";
 
 import { Wallet, bitcoin, printPsbt } from "../lib/bitcoin";
 import { generateCommitTxs } from "../lib/tx-helpers/commit-helper";
@@ -13,10 +13,11 @@ const TAG = "sender";
 export class Sender {
   private commiting = false;
   private lastHandledHeight = 0;
-  private tryCommitCount = 0;
+  private commitFailCount = 0;
+  private fatalCount = 0;
 
-  get TryCommitCount() {
-    return this.tryCommitCount;
+  get CommitFailCount() {
+    return this.commitFailCount;
   }
 
   get Committing() {
@@ -32,7 +33,6 @@ export class Sender {
 
     this.commiting = true;
     let fatalError = false;
-    this.tryCommitCount++;
     try {
       need(op.parent == operator.NewestCommitData.op.parent);
 
@@ -48,7 +48,7 @@ export class Sender {
         sysFatal({ tag: TAG, msg: "opSize too big", parent: op.parent });
       }
 
-      let feeRate = env.FeeRate;
+      let feeRate = Math.max(config.minFeeRate, env.FeeRate);
       feeRate = feeRate * config.commitFeeRateRatio;
       need(!!feeRate, internal_server_error, CodeEnum.internal_api_error);
 
@@ -250,9 +250,7 @@ export class Sender {
       for (let i = 0; i < txs.length; i++) {
         const tx = txs[i];
         let success = true;
-        try {
-          await api.broadcast2(tx.rawtx);
-        } catch (err) {}
+
         try {
           await api.broadcast(tx.rawtx);
         } catch (err) {
@@ -261,7 +259,18 @@ export class Sender {
             err.message.includes("conflict") ||
             err.message.includes("missing")
           ) {
-            fatalError = true;
+            this.fatalCount++;
+            if (this.fatalCount > 3) {
+              fatalError = true;
+            }
+            logger.error({
+              tag: TAG,
+              msg: "commit-tx-broadcast-fatal",
+              txid: tx.txid,
+              error: err.message,
+            });
+          } else {
+            this.fatalCount = 0;
           }
         }
         await sequencerTxDao.insert({
@@ -278,6 +287,7 @@ export class Sender {
       }
 
       if (fatalError) {
+        this.commitFailCount++;
         let unusedA = false;
         let unusedB = false;
         let unusedC = false;
@@ -317,7 +327,7 @@ export class Sender {
       });
       operator.NewestCommitData.inscriptionId = commitResult.inscriptionId;
 
-      this.tryCommitCount = 0;
+      this.commitFailCount = 0;
     } finally {
       this.commiting = false;
     }
@@ -325,7 +335,7 @@ export class Sender {
   }
 
   async updateSequencerDao() {
-    const blockHeight = await api.blockHeight();
+    const blockHeight = await api.bestHeight();
     if (blockHeight !== this.lastHandledHeight) {
       this.lastHandledHeight = blockHeight;
       logger.debug({ tag: TAG, msg: "update-sequencer", height: blockHeight });
@@ -371,9 +381,6 @@ export class Sender {
       });
       for (let i = 0; i < txs.length; i++) {
         const tx = txs[i];
-        try {
-          await api.broadcast2(tx.rawtx);
-        } catch (err) {}
         try {
           await api.broadcast(tx.rawtx);
           await sequencerTxDao.updateOne(
@@ -449,11 +456,13 @@ export class Sender {
       },
       { sort: { satoshi: -1 } }
     );
-    metric.nextUtxoA.set(A[0] ? A[0].satoshi : 0);
-    metric.nextUtxoB.set(B[0] ? B[0].satoshi : 0);
-    metric.estimatedCostUtxoB.set(env.FeeRate * 320);
+    metric.nextUtxoA.set(satsToBtc(A[0] ? A[0].satoshi : 0));
+    metric.nextUtxoB.set(satsToBtc(B[0] ? B[0].satoshi : 0));
+    metric.estimatedCostUtxoB.set(satsToBtc(env.FeeRate * 320));
     const opSize = JSON.stringify(operator.NewestCommitData.op).length;
-    metric.estimatedCostUtxoA.set((153 + 109 + opSize / 4) * env.FeeRate);
+    metric.estimatedCostUtxoA.set(
+      satsToBtc((153 + 109 + opSize / 4) * env.FeeRate)
+    );
 
     let res = await sequencerUtxoDao.find({
       status: "confirmed",
@@ -464,7 +473,7 @@ export class Sender {
       const item = res[i];
       total += item.satoshi;
     }
-    metric.totalUtxoBalance.set(total);
+    metric.totalUtxoBalance.set(satsToBtc(total));
 
     const res2 = await sequencerTxDao.find({});
     total = 0;
@@ -474,7 +483,7 @@ export class Sender {
         total += item.fee;
       }
     }
-    metric.costUtxoBalance.set(total);
+    metric.costUtxoBalance.set(satsToBtc(total));
   }
 
   async tick() {

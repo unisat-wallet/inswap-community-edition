@@ -34,6 +34,7 @@ describe("inscribe", () => {
       toAddress: toWallet.address,
       paymentUtxo,
       inscriptionValue: DUST330,
+      dust600: false,
     });
 
     const psbt = bitcoin.Psbt.fromHex(result.psbtHex, { network });

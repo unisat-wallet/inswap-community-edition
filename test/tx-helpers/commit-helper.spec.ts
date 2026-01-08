@@ -12,7 +12,6 @@ const dummy_op: CommitOp = {
   op: "commit" as OpType.commit,
   module: "1460b9d66137e63aaa88dc4f4bbd0398c3cd475a1de1349e08284d752da4eaeai0",
   parent: "16d7f7a2c9537265233d2377275c568a7d4bbcde116ef1fe19f07c1bf770ae4di0",
-  quit: "",
   gas_price: "0",
   data: [
     {

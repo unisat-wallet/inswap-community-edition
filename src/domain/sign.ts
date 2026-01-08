@@ -2,7 +2,10 @@ import { base64 } from "@scure/base";
 import * as bitcoin from "bitcoinjs-lib";
 import { ECPair } from ".";
 import { AddressType, HashIdMsg, OridinalMsg } from "../types/domain";
-import { getAddressType, reverseHash } from "./utils";
+import { sign_fail } from "./error";
+import { getAddressType, need, reverseHash } from "./utils";
+
+const TAG = "sign";
 
 export function getSignMsg(datas: OridinalMsg[]) {
   const prevs: string[] = [];
@@ -21,7 +24,6 @@ export function getSignMsg(datas: OridinalMsg[]) {
     const res = hashid({
       module: data.module,
       parent: data.parent,
-      quit: data.quit,
       gas_price: data.gas_price,
       addr: data.addr,
       func: data.func,
@@ -51,9 +53,6 @@ export function hashid(data: HashIdMsg) {
   hashidMsg += `module: ${data.module}\n`;
   if (data.parent) {
     hashidMsg += `parent: ${data.parent}\n`;
-  }
-  if (data.quit) {
-    hashidMsg += `quit: ${data.quit}\n`;
   }
   if (data.gas_price) {
     hashidMsg += `gas_price: ${data.gas_price}\n`;
@@ -103,11 +102,27 @@ export const schnorrValidator = (
 };
 
 export function isSignVerify(address: string, msg: string, signature: string) {
-  const addressType = getAddressType(address);
-  if (addressType === AddressType.P2WPKH) {
-    return verifySignatureOfBip322_P2PWPKH(address, msg, signature);
-  } else if (addressType === AddressType.P2TR) {
-    return verifySignatureOfBip322_P2TR(address, msg, signature);
+  try {
+    need(!!address, "address is empty");
+    need(!!msg, "message is empty");
+    need(!!signature, "signature is empty");
+    const addressType = getAddressType(address);
+    if (addressType === AddressType.P2WPKH) {
+      return verifySignatureOfBip322_P2PWPKH(address, msg, signature);
+    } else if (addressType === AddressType.P2TR) {
+      return verifySignatureOfBip322_P2TR(address, msg, signature);
+    }
+  } catch (err) {
+    logger.error({
+      tag: TAG,
+      msg: "Error verifying signature",
+      address,
+      message: msg,
+      signature,
+      error: err.message,
+      stack: err.stack,
+    });
+    return false;
   }
   return false;
 }
@@ -187,6 +202,7 @@ export function verifySignatureOfBip322_P2TR(
 
   const data = Buffer.from(base64.decode(sign));
   const _res = bitcoin.script.decompile(data.slice(1));
+  need(!!_res, sign_fail);
   const signature = _res[0] as Buffer;
   const pubkey = Buffer.from(
     "02" + outputScript.subarray(2).toString("hex"),

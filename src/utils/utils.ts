@@ -1,9 +1,15 @@
 import { Mutex, MutexInterface } from "async-mutex";
 import { AxiosError } from "axios";
+import * as bitcoin from "bitcoinjs-lib";
 import Joi from "joi";
 import _, { Dictionary } from "lodash";
 import moment from "moment-timezone";
 import { bn, decimalCal } from "../contract/bn";
+import { not_support_address } from "../domain/error";
+import { toXOnly } from "../lib/bitcoin";
+import { AddressType } from "../types/domain";
+import { NetworkType } from "../types/route";
+import { checkTimeUint, need } from "../domain/utils";
 
 export function schema(
   _req: Joi.Schema,
@@ -15,7 +21,7 @@ export function schema(
 
   const getInfo = () => {
     if (info?.apiDoc) {
-      return { ...info, tags: ["BRC20-Swap"] };
+      return { ...info, tags: ["PizzsSwap"] };
     } else {
       {
       }
@@ -161,4 +167,61 @@ export function isProportional(amount0: string, amount1: string) {
     }
   }
   return false;
+}
+
+export function getAddress(
+  addressType: AddressType,
+  pubkey: string,
+  networkType: NetworkType
+) {
+  let network = bitcoin.networks.bitcoin;
+  if (
+    networkType == NetworkType.BITCOIN_TESTNET ||
+    networkType == NetworkType.BITCOIN_TESTNET4 ||
+    networkType == NetworkType.BITCOIN_SIGNET
+  ) {
+    network = bitcoin.networks.testnet;
+  }
+  if (addressType == AddressType.P2TR) {
+    const { address } = bitcoin.payments.p2tr({
+      internalPubkey: toXOnly(Buffer.from(pubkey, "hex")),
+      network,
+    });
+    return address;
+  } else if (addressType == AddressType.P2WPKH) {
+    const { address } = bitcoin.payments.p2wpkh({
+      pubkey: Buffer.from(pubkey, "hex"),
+      network,
+    });
+    return address;
+  } else {
+    throw new Error(not_support_address);
+  }
+}
+
+export function timeConversion(
+  timeString: string,
+  conversionType: "millisecond" | "seconds" | "minutes"
+) {
+  const uint = timeString.slice(-1);
+  checkTimeUint(uint);
+  const value = parseInt(timeString.slice(0, -1));
+  need(!isNaN(value), "timeString not available");
+  const unitToMs: Record<string, number> = {
+    d: 24 * 60 * 60 * 1000,
+    h: 60 * 60 * 1000,
+    m: 60 * 1000,
+    s: 1000,
+  };
+  const milliseconds = value * unitToMs[uint];
+  switch (conversionType) {
+    case "millisecond":
+      return milliseconds;
+    case "seconds":
+      return milliseconds / 1000;
+    case "minutes":
+      return milliseconds / (60 * 1000);
+    default:
+      throw new Error(`Unsupported conversion type: ${conversionType}`);
+  }
 }

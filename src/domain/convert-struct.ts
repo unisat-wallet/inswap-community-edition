@@ -11,8 +11,11 @@ import {
   FuncType,
   InscriptionFunc,
   InternalFunc,
+  LockParams,
   Result,
+  SendLpParams,
   SendParams,
+  UnlockParams,
 } from "../types/func";
 import {} from "../types/global";
 import { CommitOp } from "../types/op";
@@ -22,6 +25,7 @@ import { getSignMsg } from "./sign";
 
 import {
   getPairStrV1,
+  getPairStrV2,
   getPairStructV1,
   getPairStructV2,
   sortTickParams,
@@ -144,7 +148,29 @@ export function convertReq2Map(req: FuncReq): FuncMap {
         from: address,
         to,
         tick,
-        amount: bnUint(amount, decimal.get(tick)),
+        amount: bnUint(amount, LP_DECIMAL),
+      },
+    };
+  } else if (func == FuncType.lock) {
+    const { address, tick0, tick1, amount } = req.req;
+    const tick = getPairStrV2(tick0, tick1);
+    return {
+      func,
+      params: {
+        address,
+        tick,
+        amount: bnUint(amount, LP_DECIMAL),
+      },
+    };
+  } else if (func == FuncType.unlock) {
+    const { address, tick0, tick1, amount } = req.req;
+    const tick = getPairStrV2(tick0, tick1);
+    return {
+      func,
+      params: {
+        address,
+        tick,
+        amount: bnUint(amount, LP_DECIMAL),
       },
     };
   }
@@ -155,7 +181,7 @@ export function convertReq2Arr(req: FuncReq): FuncArr {
   const func = req.func;
 
   if (func == FuncType.addLiq) {
-    if (env.NewestHeight < config.updateHeight1) {
+    if (env.BestHeight < config.updateHeight1) {
       const { tick0, tick1, slippage, amount0, amount1, lp } = sortTickParams(
         req.req
       );
@@ -177,7 +203,7 @@ export function convertReq2Arr(req: FuncReq): FuncArr {
       };
     }
   } else if (func == FuncType.swap) {
-    if (env.NewestHeight < config.updateHeight1) {
+    if (env.BestHeight < config.updateHeight1) {
       const { amountIn, amountOut, exactType, slippage, tickIn, tickOut } =
         req.req;
       let expect: string;
@@ -239,7 +265,7 @@ export function convertReq2Arr(req: FuncReq): FuncArr {
       params: [tick0, tick1],
     };
   } else if (func == FuncType.removeLiq) {
-    if (env.NewestHeight < config.updateHeight1) {
+    if (env.BestHeight < config.updateHeight1) {
       const { tick0, tick1, slippage, lp, amount0, amount1 } = sortTickParams(
         req.req
       );
@@ -272,9 +298,22 @@ export function convertReq2Arr(req: FuncReq): FuncArr {
     };
   } else if (func == FuncType.sendLp) {
     const { to, tick, amount } = req.req;
+    const { tick0, tick1 } = getPairStructV2(tick);
     return {
       func,
-      params: [to, tick, amount],
+      params: [to, tick0, tick1, amount],
+    };
+  } else if (func == FuncType.lock) {
+    const { tick0, tick1, amount } = sortTickParams(req.req);
+    return {
+      func,
+      params: [tick0, tick1, amount],
+    };
+  } else if (func == FuncType.unlock) {
+    const { tick0, tick1, amount } = sortTickParams(req.req);
+    return {
+      func,
+      params: [tick0, tick1, amount],
     };
   } else {
     throw new CodeError(invalid_aggregation);
@@ -437,15 +476,47 @@ export function convertFuncInternal2Inscription(
     };
   } else if (func.func == FuncType.sendLp) {
     const params = func.params;
+    const { tick0, tick1 } = getPairStructV2(params.tick);
     return {
       id: func.id,
       func: func.func,
       params: [
         params.to,
-        params.tick,
-        bnDecimal(params.amount, decimal.get(params.tick)),
-      ] as SendParams,
+        tick0,
+        tick1,
+        bnDecimal(params.amount, LP_DECIMAL),
+      ] as SendLpParams,
       addr: params.from,
+      ts: func.ts,
+      sig: func.sig,
+    };
+  } else if (func.func == FuncType.lock) {
+    const params = func.params;
+    const { tick0, tick1 } = getPairStructV2(params.tick);
+    return {
+      id: func.id,
+      func: func.func,
+      params: [
+        tick0,
+        tick1,
+        bnDecimal(params.amount, LP_DECIMAL),
+      ] as SendParams,
+      addr: params.address,
+      ts: func.ts,
+      sig: func.sig,
+    };
+  } else if (func.func == FuncType.unlock) {
+    const params = func.params;
+    const { tick0, tick1 } = getPairStructV2(params.tick);
+    return {
+      id: func.id,
+      func: func.func,
+      params: [
+        tick0,
+        tick1,
+        bnDecimal(params.amount, LP_DECIMAL),
+      ] as SendParams,
+      addr: params.address,
       ts: func.ts,
       sig: func.sig,
     };
@@ -469,7 +540,6 @@ export function convertFuncInscription2Internal(
       lastData = {
         module: op.module,
         parent: op.parent,
-        quit: op.quit,
         gas_price: op.gas_price,
         addr: lastFunc.addr,
         func: lastFunc.func,
@@ -683,9 +753,9 @@ export function convertFuncInscription2Internal(
       sig: lastFunc.sig,
     };
   } else if (lastFunc.func == FuncType.sendLp) {
-    const params = lastFunc.params as SendParams;
-    const tick = params[1];
-    const amount = params[2];
+    const params = lastFunc.params as SendLpParams;
+    const tick = getPairStrV2(params[1], params[2]);
+    const amount = params[3];
     return {
       id,
       func: lastFunc.func,
@@ -694,7 +764,43 @@ export function convertFuncInscription2Internal(
         from: lastFunc.addr,
         to: params[0],
         tick,
-        amount: bnUint(amount, decimal.get(tick)),
+        amount: bnUint(amount, LP_DECIMAL),
+      },
+      prevs,
+      ts: lastFunc.ts,
+      sig: lastFunc.sig,
+    };
+  } else if (lastFunc.func == FuncType.lock) {
+    const params = lastFunc.params as LockParams;
+    const tick0 = params[0];
+    const tick1 = params[1];
+    const pair = getPairStrV2(tick0, tick1);
+    const amount = params[2];
+    return {
+      id,
+      func: lastFunc.func,
+      params: {
+        address: lastFunc.addr,
+        tick: pair,
+        amount: bnUint(amount, LP_DECIMAL),
+      },
+      prevs,
+      ts: lastFunc.ts,
+      sig: lastFunc.sig,
+    };
+  } else if (lastFunc.func == FuncType.unlock) {
+    const params = lastFunc.params as UnlockParams;
+    const tick0 = params[0];
+    const tick1 = params[1];
+    const pair = getPairStrV2(tick0, tick1);
+    const amount = params[2];
+    return {
+      id,
+      func: lastFunc.func,
+      params: {
+        address: lastFunc.addr,
+        tick: pair,
+        amount: bnUint(amount, LP_DECIMAL),
       },
       prevs,
       ts: lastFunc.ts,
@@ -709,9 +815,17 @@ export function convertResultToDecimal(result: Result) {
     for (let i = 0; i < ret.users.length; i++) {
       if (isLp(ret.users[i].tick)) {
         ret.users[i].balance = bnDecimal(ret.users[i].balance, LP_DECIMAL);
+        ret.users[i].lockedBalance = bnDecimal(
+          ret.users[i].lockedBalance,
+          LP_DECIMAL
+        );
       } else {
         ret.users[i].balance = bnDecimal(
           ret.users[i].balance,
+          decimal.get(ret.users[i].tick)
+        );
+        ret.users[i].lockedBalance = bnDecimal(
+          ret.users[i].lockedBalance,
           decimal.get(ret.users[i].tick)
         );
       }

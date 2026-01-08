@@ -1,6 +1,7 @@
 import {
   AggregateOptions,
   BulkWriteOptions,
+  ClientSession,
   CountDocumentsOptions,
   Filter,
   FindOptions,
@@ -15,18 +16,19 @@ export class MongoUtils {
   readonly url: string;
   readonly dbName: string;
 
-  private client: MongoClient;
+  client: MongoClient;
 
   constructor(url: string, dbName: string) {
     this.url = url;
     this.dbName = dbName;
   }
 
-  async startTransaction(action: Function) {
+  async startTransaction(action: (session: ClientSession) => void) {
     const session = this.client.startSession();
     session.startTransaction();
     try {
-      await action();
+      await action(session);
+      await session.commitTransaction();
     } catch (err) {
       await session.abortTransaction();
       throw err;
@@ -38,8 +40,8 @@ export class MongoUtils {
   async init() {
     this.client = await MongoClient.connect(this.url, {
       useUnifiedTopology: true,
-      minPoolSize: 20,
-      maxPoolSize: 200,
+      minPoolSize: 10,
+      maxPoolSize: 20,
     } as any);
   }
 
@@ -64,6 +66,56 @@ export class MongoUtils {
           reject(err);
         });
     });
+  }
+
+  // Fast estimated count using collection stats
+  async estimatedCount(
+    tableName: string,
+    findFilter: object = {}
+  ): Promise<number> {
+    try {
+      // If filter is empty, use collection stats for fast estimation
+      if (Object.keys(findFilter).length === 0) {
+        const stats = await this.client
+          .db(this.dbName)
+          .collection(tableName)
+          .stats();
+        return stats.count || 0;
+      }
+
+      // For non-empty filters, use sampling for estimation
+      const pipeline = [
+        { $match: findFilter },
+        { $sample: { size: 1000 } }, // Sample 1000 documents
+        { $count: "sampleCount" },
+      ];
+
+      const result = await this.client
+        .db(this.dbName)
+        .collection(tableName)
+        .aggregate(pipeline)
+        .toArray();
+      const sampleCount = result[0]?.sampleCount || 0;
+
+      // Estimate total count based on sample ratio
+      const totalStats = await this.client
+        .db(this.dbName)
+        .collection(tableName)
+        .stats();
+      const totalCount = totalStats.count || 0;
+
+      // If sample is too small, fall back to regular count
+      if (sampleCount < 100) {
+        return this.count(tableName, findFilter);
+      }
+
+      // Estimate based on sample ratio
+      const estimatedCount = Math.round((sampleCount / 1000) * totalCount);
+      return estimatedCount;
+    } catch (error) {
+      // Fall back to regular count if estimation fails
+      return this.count(tableName, findFilter);
+    }
   }
 
   insert(

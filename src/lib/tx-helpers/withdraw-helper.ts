@@ -1,3 +1,4 @@
+import { DUST600 } from "../../domain/constant";
 import { CodeEnum } from "../../domain/error";
 import { need } from "../../domain/utils";
 import { UTXO } from "../../types/api";
@@ -26,7 +27,8 @@ export function estimateWithdrawFee({
     (350 + content.length / 4) * feeRate +
     107 +
     utxos.length * 60 +
-    userWallet.dust * 2;
+    userWallet.dust * 2 +
+    1200; /** fault tolerance */
   return fee;
 }
 
@@ -76,6 +78,7 @@ export function generateConditionalWithdrawTxs({
       address: senderWallet.address,
       value: changeValue,
     },
+    dust600: false,
   });
 
   // sendInscription
@@ -104,6 +107,7 @@ export function generateConditionalWithdrawTxs({
       address: delegateWallet.address,
     },
     disableChange: true,
+    dust600: false,
   });
 
   const dummyPsbt3 = bitcoin.Psbt.fromHex(dummyTx3Result.psbtHex, { network });
@@ -128,6 +132,7 @@ export function generateConditionalWithdrawTxs({
     toAddress: dummyTx2Result.payAddress,
     toAmount: orderPayment,
     feeRate,
+    dust600: false,
   });
 
   // inscribe
@@ -146,6 +151,7 @@ export function generateConditionalWithdrawTxs({
       value: Math.floor(virtualSize3 * feeRate),
     },
     toAddress: userWallet.address,
+    dust600: false,
   });
 
   const sendInscriptionTxResult = generateSendInscriptionTx({
@@ -173,6 +179,7 @@ export function generateConditionalWithdrawTxs({
       address: delegateWallet.address,
     },
     disableChange: true,
+    dust600: false,
   });
 
   return {
@@ -240,6 +247,7 @@ export function generateDirectWithdrawTxs({
       address: senderWallet.address,
       value: changeValue,
     },
+    dust600: false,
   });
 
   // sendInscription
@@ -268,6 +276,7 @@ export function generateDirectWithdrawTxs({
       address: dummyUserWallet.address,
     },
     disableChange: true,
+    dust600: false,
   });
 
   const dummyPsbt3 = bitcoin.Psbt.fromHex(dummyTx3Result.psbtHex, { network });
@@ -281,8 +290,9 @@ export function generateDirectWithdrawTxs({
   dummyPsbt3.finalizeAllInputs();
   const virtualSize3 = dummyPsbt3.extractTransaction(true).virtualSize();
 
+  const tx3Pay = Math.max(Math.floor(virtualSize3 * feeRate), DUST600);
   const orderPayment = Math.ceil(
-    (dummyTx2Result.virtualSize + virtualSize3) * feeRate + userWallet.dust
+    dummyTx2Result.virtualSize * feeRate + tx3Pay + userWallet.dust
   );
 
   // pay order
@@ -292,6 +302,7 @@ export function generateDirectWithdrawTxs({
     toAddress: dummyTx2Result.payAddress,
     toAmount: orderPayment,
     feeRate,
+    dust600: false,
   });
 
   // inscribe
@@ -300,16 +311,17 @@ export function generateDirectWithdrawTxs({
     content,
     paymentUtxo: {
       txid: sendBTCTxResult.txid,
-      vout: 0,
+      vout: 1,
       satoshi: orderPayment,
       codeType: AddressType.P2TR,
     },
     inscriptionValue,
     change: {
       address: senderWallet.address,
-      value: Math.floor(virtualSize3 * feeRate),
+      value: tx3Pay,
     },
     toAddress: userWallet.address,
+    dust600: false,
   });
 
   const sendInscriptionTxResult = generateSendInscriptionTx({
@@ -337,6 +349,7 @@ export function generateDirectWithdrawTxs({
       address: userWallet.address,
     },
     disableChange: true,
+    dust600: false,
   });
 
   return {

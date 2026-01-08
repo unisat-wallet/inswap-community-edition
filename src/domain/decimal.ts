@@ -6,6 +6,13 @@ import { need } from "./utils";
  */
 export class Decimal {
   private map: { [key: string]: string } = {};
+
+  static fromData(data: { [key: string]: string }) {
+    const ret = new Decimal();
+    ret.map = data;
+    return ret;
+  }
+
   getRealTick(tick: string) {
     for (let k in this.map) {
       if (k.toLowerCase() == tick.toLowerCase()) {
@@ -51,7 +58,7 @@ export class Decimal {
   }
   async trySetting(_tick: string) {
     if (!this.map[_tick]) {
-      const info = await api.tickInfo(_tick);
+      const info = await api.brc20Info(_tick);
       const tick = info.ticker;
       const decimal = info.decimal.toString();
       await tickDao.upsertOne({ tick }, { $set: { tick, decimal } });

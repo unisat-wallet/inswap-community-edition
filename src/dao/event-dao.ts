@@ -1,3 +1,4 @@
+import { UpdateOptions } from "mongodb";
 import { OpEvent, OpType } from "../types/op";
 import { BaseDao } from "./base-dao";
 
@@ -11,12 +12,13 @@ export class OpEventDao extends BaseDao<OpEvent> {
     )[0];
   }
 
-  async upsertData(data: OpEvent) {
+  async upsertData(data: OpEvent, opts: UpdateOptions = {}) {
     await opEventDao.upsertOne(
       {
         cursor: data.cursor,
       },
-      { $set: data }
+      { $set: data },
+      opts
     );
   }
 }

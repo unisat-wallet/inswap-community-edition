@@ -34,6 +34,11 @@ function convert32To10(n: string) {
   return str32.indexOf(n);
 }
 
+export function getPairStrV2_2(tick0: string, tick1: string) {
+  const params = sortTickParams({ tick0, tick1 });
+  return `${Buffer.from(params.tick0).length}/${params.tick0}${params.tick1}`;
+}
+
 /**
  * Generate pair string
  * e.g.

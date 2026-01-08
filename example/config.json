@@ -1,0 +1,73 @@
+{
+  "config": {
+    "cors": false,
+    "db": "pizza-swap-test",
+    "openSwagger": false,
+    "fakeMarketPrice": true,
+    "fixedGasPrice": "",
+    "port": 30020,
+    "mongoUrl": "mongodb://127.0.0.1:27000/",
+    "openApi": {
+      "url": "https://open-api-fractal-testnet.unisat.io/v1/indexer",
+      "apiKey": "YOUR_KEY"
+    },
+    "openApi2": {
+      "url": "https://open-api-fractal-testnet.unisat.io/v1/indexer",
+      "apiKey": "YOUR_KEY"
+    },
+    "mempoolApi": "https://mempool-testnet.fractalbitcoin.io/",
+    "network": "bitcoin",
+    "keyring": {
+      "sequencerWallet": {
+        "address": "bc1qk2l7fnvhndcjyaksh4lfmzz5uazf4rtdw8tcr7"
+      },
+      "rootWallet": {
+        "address": "bc1qkkugtwhhmjdawayetmj06p0l06nv25n2jguw5e"
+      },
+      "btcWallet": {
+        "address": "bc1qdajkzdh7syzddhvkejf92rayy07lk6t3jjj79w"
+      },
+      "approveWallet": {
+        "address": "bc1qnrsdj6js26v6wjyqp5f48t24yrkd69nfuzjz36"
+      }
+    },
+    "startHeight": 0,
+    "moduleId": "37c832cfdcc547ba9b57056b0e353bfed3f85a54963a02ad77ceb0351ffa3828i0",
+    "source": "c8a842fcf1e4ef999f387b0900b9be269273ee8557524307dbfca5e77fae475fi0",
+    "isContractOnChain": false,
+    "pendingWithdrawNum": 3,
+    "pendingRollupNum": 1,
+    "insertHeightNum": 11,
+    "openCommitPerMinute": true,
+    "commitPerMinute": 1,
+    "commitPerSize": 300,
+    "eventListPerSize": 1000,
+    "snapshotPerSize": 10,
+    "openSwapAccess": false,
+    "testWithdraw": false,
+    "enableApiUTXO": false,
+    "verifyCommit": true,
+    "verifyCommitInvalidException": false,
+    "verifyCommitCriticalException": false,
+    "verifyCommitFatalNum": 5,
+    "pendingDepositDirectNum": 10,
+    "pendingDepositMatchingNum": 1,
+    "pendingTransferNum": 1,
+    "commitFeeRateRatio": 1.2,
+    "userFeeRateRatio": 2,
+    "openWhitelistTick": false,
+    "isLocalTest": false,
+    "canSwap": true,
+    "userWhiteList": [],
+    "sendRootAddress": "bc1q76qc3rxsy5v764n24q6un3n9yzfker8y9dmrxy",
+    "onlyUserWhiteList": false,
+    "sendSysAddress": "bc1q0m3kl8vygvqms8ymtzm3kphsgfje5kdhszjwfg",
+    "onlySendSysAddress": false,
+    "whitelistTick": {},
+    "binOpts": [],
+    "updateHeight1": 1,
+    "initTicks": ["test_ordi", "test_sats"],
+    "readonly": true,
+    "minFeeRate": 2
+  }
+}

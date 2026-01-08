@@ -2,7 +2,7 @@ import { FastifyInstance } from "fastify";
 
 export const swagger = async (fastify: FastifyInstance) => {
   /**
-   * @entry http://localhost:3000/documentation/static/index.html
+   * @entry http://localhost:{port}/documentation/static/index.html
    */
   await fastify.register(require("@fastify/swagger"), {
     hideUntagged: true,

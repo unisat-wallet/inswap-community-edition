@@ -1,45 +1,50 @@
 {
   "config": {
-    "cors": false,
-    "db": "pizza-swap-test",
     "openSwagger": false,
-    "fakeMarketPrice": true,
-    "fixedGasPrice": "",
+    "cors": false,
+    "db": "pizza-swap",
+    "localDebug": true,
+    "routeDebugLog": false,
+    "winstonDebugLog": true,
+    "fakeMarketPrice": false,
+    "fixedGasPrice": "0",
     "port": 30020,
-    "mongoUrl": "mongodb://127.0.0.1:27000/",
+    "mongoUrl": "",
     "openApi": {
-      "url": "https://open-api-fractal-testnet.unisat.io/v1/indexer",
-      "apiKey": "YOUR_KEY"
+      "bitcoin": {
+        "apiKey": ""
+      },
+      "fractal": {
+        "apiKey": ""
+      }
     },
-    "openApi2": {
-      "url": "https://open-api-fractal-testnet.unisat.io/v1/indexer",
-      "apiKey": "YOUR_KEY"
-    },
-    "mempoolApi": "https://mempool-testnet.fractalbitcoin.io/",
     "network": "bitcoin",
     "keyring": {
       "sequencerWallet": {
-        "address": "bc1qk2l7fnvhndcjyaksh4lfmzz5uazf4rtdw8tcr7"
+        "address": "bc1qtaf86fqf9hv7r76927fjpxc0mpvedgyp7zjneu"
       },
       "rootWallet": {
-        "address": "bc1qkkugtwhhmjdawayetmj06p0l06nv25n2jguw5e"
+        "address": "bc1qrdp89mzgqk7vucydr7tv3e6gw8yv4vtkq0mpj0"
       },
       "btcWallet": {
-        "address": "bc1qdajkzdh7syzddhvkejf92rayy07lk6t3jjj79w"
+        "address": "bc1qyzt8j4m2c6e9uhseaglzrvag3j0qq5fq7f0afz"
       },
       "approveWallet": {
-        "address": "bc1qnrsdj6js26v6wjyqp5f48t24yrkd69nfuzjz36"
+        "address": "bc1qe2w6t8sls4v0rfdwd8na3t5v426843guwpf2k8"
+      },
+      "accelerateWallet": {
+        "address": "bc1qcce7j6lxduhf6m6fgggf9l45mxnp42d4e2l5tc"
       }
     },
     "startHeight": 0,
-    "moduleId": "37c832cfdcc547ba9b57056b0e353bfed3f85a54963a02ad77ceb0351ffa3828i0",
-    "source": "c8a842fcf1e4ef999f387b0900b9be269273ee8557524307dbfca5e77fae475fi0",
+    "moduleId": "fd5bd482bed1b62d0702e2f19a1e3bdd4fb755fa5c9bed5d8d0f219a3219ee95i0",
+    "source": "34761af5d6aa0ab7f14589e6f0a905b505c40ba542c9a27d407c9d052499ffddi0",
     "isContractOnChain": false,
     "pendingWithdrawNum": 3,
     "pendingRollupNum": 1,
-    "insertHeightNum": 11,
+    "insertHeightNum": 80,
     "openCommitPerMinute": true,
-    "commitPerMinute": 1,
+    "commitPerMinute": 10,
     "commitPerSize": 300,
     "eventListPerSize": 1000,
     "snapshotPerSize": 10,
@@ -47,27 +52,82 @@
     "testWithdraw": false,
     "enableApiUTXO": false,
     "verifyCommit": true,
-    "verifyCommitInvalidException": false,
-    "verifyCommitCriticalException": false,
+    "verifyCommitInvalidException": true,
+    "verifyCommitCriticalException": true,
     "verifyCommitFatalNum": 5,
-    "pendingDepositDirectNum": 10,
-    "pendingDepositMatchingNum": 1,
+    "pendingDepositDirectNum": 5,
+    "pendingDepositMatchingNum": 10,
     "pendingTransferNum": 1,
-    "commitFeeRateRatio": 1.2,
-    "userFeeRateRatio": 2,
+    "commitFeeRateRatio": 1,
+    "userFeeRateRatio": 1.2,
     "openWhitelistTick": false,
     "isLocalTest": false,
     "canSwap": true,
     "userWhiteList": [],
-    "sendRootAddress": "bc1q76qc3rxsy5v764n24q6un3n9yzfker8y9dmrxy",
     "onlyUserWhiteList": false,
-    "sendSysAddress": "bc1q0m3kl8vygvqms8ymtzm3kphsgfje5kdhszjwfg",
-    "onlySendSysAddress": false,
-    "whitelistTick": {},
+    "whitelistTick": {
+      "bBTC___": { "depositLimit": 0, "withdrawLimit": 0 },
+      "bSATS_": { "depositLimit": 0, "withdrawLimit": 0 },
+      "bORDI_": { "depositLimit": 0, "withdrawLimit": 0 },
+      "sBTC___000": { "depositLimit": 0, "withdrawLimit": 0 },
+      "sORDI___000": { "depositLimit": 0, "withdrawLimit": 0 },
+      "sSATS___000": { "depositLimit": 0, "withdrawLimit": 0 },
+      "GLIZZY": { "depositLimit": 0, "withdrawLimit": 0 },
+      "people": { "depositLimit": 0, "withdrawLimit": 0 },
+      "MoonCats": { "depositLimit": 0, "withdrawLimit": 0 },
+      "sQUAQ___000": { "depositLimit": 0, "withdrawLimit": 0 },
+      "sOSHI___000": { "depositLimit": 0, "withdrawLimit": 0 },
+      "sPEPE___000": { "depositLimit": 0, "withdrawLimit": 0 },
+      "sTRAC___000": { "depositLimit": 0, "withdrawLimit": 0 },
+      "sMEME___000": { "depositLimit": 0, "withdrawLimit": 0 },
+      "sRATS___000": { "depositLimit": 0, "withdrawLimit": 0 },
+      "sPIZZA___000": { "depositLimit": 0, "withdrawLimit": 0 },
+      "sFB___000": { "depositLimit": 0, "withdrawLimit": 0 },
+      "bFB_____": { "depositLimit": 0, "withdrawLimit": 0 }
+    },
     "binOpts": [],
     "updateHeight1": 1,
-    "initTicks": ["test_ordi", "test_sats"],
-    "readonly": true,
-    "minFeeRate": 2
+    "initTicks": ["bSATS_", "GLIZZY"],
+    "readonly": false,
+    "minFeeRate": 1000,
+
+    "coinmarketcapApi": {
+      "url": "",
+      "apiKey": ""
+    },
+    "btcBridgeApi": {
+      "url": ""
+    },
+    "fbBridgeApi": {
+      "url": ""
+    },
+    "verifyPerOpt": true,
+    "fixedFeeAmount": "",
+    "feeTicks": [
+      "bSATS_",
+      "sSATS___000",
+      "bFB_____",
+      "sFB___000",
+      "sBTC___000"
+    ],
+    "initiatePoolUpdate": false,
+    "unisatGlobalApi": {
+      "url": ""
+    },
+    "createDbIndex": true,
+    "checkStakePoolBalance": true,
+    "proxyAddress": "",
+    "filterTicks": [],
+    "healthyApi": {
+      "url": "",
+      "apiKey": ""
+    },
+    "openHealthyStatus": false,
+    "useAvailableUtxoData": true,
+    "compareIndexer": false,
+    "compareIndexerCommitGoForward": 0,
+    "swapExceptionValue": 1000000,
+    "lpExceptionValue": 1000000,
+    "l1SupplyMap": {}
   }
 }

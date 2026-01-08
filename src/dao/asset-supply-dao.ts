@@ -1,3 +1,4 @@
+import { UpdateOptions } from "mongodb";
 import { BaseDao } from "./base-dao";
 
 export type AssetSupply = {
@@ -11,10 +12,11 @@ export type AssetSupply = {
 };
 
 export class AssetSupplyDao extends BaseDao<AssetSupply> {
-  async upsertData(data: AssetSupply) {
+  async upsertData(data: AssetSupply, opts: UpdateOptions = {}) {
     await this.upsertOne(
       { tick: data.tick, assetType: data.assetType },
-      { $set: data }
+      { $set: data },
+      opts
     );
   }
 }

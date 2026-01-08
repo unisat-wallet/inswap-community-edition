@@ -106,7 +106,7 @@ export class Brc20 {
   private checkAddress(address: string, value = "0") {
     need(
       bn(this.balance[address]).gte(value),
-      "insufficient amount: " + this.tick
+      "insufficient amount: " + this.tick + ", address: " + address
     );
   }
 }

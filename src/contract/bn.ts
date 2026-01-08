@@ -11,6 +11,15 @@ bn.config({
   ROUNDING_MODE: bn.ROUND_DOWN,
 });
 
+const bnMap: { [decimal: string]: typeof BigNumber } = {};
+for (let i = 0; i <= 18; i++) {
+  bnMap[i] = bn.clone({
+    EXPONENTIAL_AT: 1e9,
+    DECIMAL_PLACES: parseInt(i.toString()),
+    ROUNDING_MODE: bn.ROUND_DOWN,
+  });
+}
+
 export type BnCalSymbol = "add" | "sub" | "mul" | "div" | "sqrt";
 
 export function bnUint(value: string, decimal: string) {
@@ -29,11 +38,7 @@ export function bnIsInteger(value: BigNumber.Value) {
 }
 
 export function bnDecimal(value: string, decimal: string) {
-  const _bn = bn.clone({
-    EXPONENTIAL_AT: 1e9,
-    DECIMAL_PLACES: 18,
-    ROUNDING_MODE: bn.ROUND_DOWN,
-  });
+  const _bn = bnMap[18];
   return _bn(value)
     .div(_bn("10").pow(decimal))
     .decimalPlaces(parseInt(decimal))
@@ -44,12 +49,7 @@ function _bnCal(
   items: (BnCalSymbol | BigNumber.Value)[],
   decimalPlaces: string
 ): string {
-  const _bn = bn.clone();
-  _bn.config({
-    EXPONENTIAL_AT: 1e9,
-    DECIMAL_PLACES: parseInt(decimalPlaces),
-    ROUNDING_MODE: bn.ROUND_DOWN,
-  });
+  const _bn = bnMap[decimalPlaces] || bnMap[DEFAULT_DECIMAL];
   let ret = _bn(items[0]);
   need(!_bn(items[0]).isNaN());
   need(_bn(items[1]).isNaN());
@@ -99,4 +99,8 @@ export function decimalCal(
   decimalPlaces?: string
 ): string {
   return _bnCal(items, decimalPlaces || DEFAULT_DECIMAL);
+}
+
+export function bnGte(amount0: string, amount1: string): boolean {
+  return bn(amount0).gte(amount1);
 }

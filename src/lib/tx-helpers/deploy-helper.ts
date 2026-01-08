@@ -35,6 +35,7 @@ export function generateDeployModuleTxs({
     content,
     paymentUtxo: dummyUtxo,
     inscriptionValue,
+    dust600: false,
   });
   const fee = Math.ceil(virtualSize * feeRate);
   const payAmount = fee + inscriptionValue;
@@ -46,6 +47,7 @@ export function generateDeployModuleTxs({
     toAddress: payAddress,
     toAmount: payAmount,
     feeRate,
+    dust600: false,
   });
 
   const nextBtcUtxo: UTXO = {
@@ -68,6 +70,7 @@ export function generateDeployModuleTxs({
       codeType: AddressType.P2TR,
     },
     inscriptionValue,
+    dust600: false,
   });
 
   // sendInscription
@@ -140,6 +143,7 @@ export function generateDeployContractTxs({
     content,
     paymentUtxo: dummyUtxo,
     inscriptionValue,
+    dust600: false,
   });
   const fee = Math.ceil(virtualSize * feeRate);
   const payAmount = fee + inscriptionValue;
@@ -151,6 +155,7 @@ export function generateDeployContractTxs({
     toAddress: payAddress,
     toAmount: payAmount,
     feeRate,
+    dust600: false,
   });
 
   const nextBtcUtxo: UTXO = {
@@ -173,6 +178,7 @@ export function generateDeployContractTxs({
       codeType: AddressType.P2TR,
     },
     inscriptionValue,
+    dust600: false,
   });
 
   return {

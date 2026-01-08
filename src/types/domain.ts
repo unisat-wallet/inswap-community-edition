@@ -1,25 +1,40 @@
 import { LoggerLevel } from "../config";
 import { Brc20 } from "../contract/brc20";
+import { LpRewardPoolMap, LpRewardUserMap } from "../domain/lp-reward";
 
 export type Config = {
   loggerLevel: LoggerLevel;
   cors: boolean;
   db: string;
+  createDbIndex: boolean;
   openSwagger: boolean;
-  fakeMarketPrice: boolean;
   fixedGasPrice: string;
+  fixedFeeAmount: string;
   port: number;
   mongoUrl: string;
   openApi: {
+    bitcoin: {
+      apiKey: string;
+    };
+    fractal: {
+      apiKey: string;
+    };
+  };
+  simpleBridgeApi: {
+    bitcoin: {
+      url: string;
+      host: string;
+    };
+    fractal: {
+      url: string;
+      host: string;
+    };
+  };
+  unisatGlobalApi?: {
     url: string;
     host: string;
-    apiKey: string;
   };
-  openApi2: {
-    url: string;
-    host: string;
-    apiKey: string;
-  };
+  openHealthyStatus: boolean;
   mempoolApi: string;
   network: string;
   keyring: {
@@ -39,6 +54,16 @@ export type Config = {
       wifWithKey?: string;
     };
     approveWallet: {
+      address: string;
+      wif?: string;
+      wifWithKey?: string;
+    };
+    accelerateWallet: {
+      address: string;
+      wif?: string;
+      wifWithKey?: string;
+    };
+    fbClaimWallet: {
       address: string;
       wif?: string;
       wifWithKey?: string;
@@ -77,6 +102,29 @@ export type Config = {
   updateHeight1: number;
   initTicks: string[];
   readonly: boolean;
+  verifyPerOpt: boolean;
+  feeTicks: string[];
+  initiatePoolUpdate: boolean;
+  skipRebuild: boolean;
+  checkStakePoolBalance: boolean;
+  filterTicks: string[];
+  proxyAddress: string;
+  useAvailableUtxoData: boolean;
+  compareIndexer: boolean;
+  compareIndexerCommitGoForward: number;
+  swapExceptionValue: number;
+  lpExceptionValue: number;
+  swapFeeRate?: string;
+  mirror?: boolean;
+  initiateRewardCurveUpdate?: boolean;
+  initiateUpdateAllBalances?: boolean;
+  hideSelectDepositL1Tick: string[];
+  balanceWorker: {
+    updateIntervalMs: number;
+    maxUpdateCount: number;
+    concurrentLimit?: number;
+  };
+  l1SupplyMap: { [tick: string]: number };
 };
 
 export enum AddressType {
@@ -105,11 +153,16 @@ export type Pool = {
   [key: string]: { amount0: string; amount1: string; lp: string };
 }; // pair -> { amount0, amount1, lp }
 
-export type AddressBalance = {
+export type AddressTickBalance = {
   module: string;
   swap: string;
   pendingSwap: string;
   pendingAvailable: string;
+};
+
+export type AddressLpBalance = {
+  swap: string;
+  lock: string;
 };
 
 export type Pair = {
@@ -122,13 +175,16 @@ export type SnapshotObj = {
     [assetType: string]: { [tick: string]: Brc20 };
   };
   contractStatus: ContractStatus;
+  lpReward: {
+    poolMap: LpRewardPoolMap;
+    userMap: LpRewardUserMap;
+  };
   used: boolean;
 };
 
 export type OridinalMsg = {
   module: string;
   parent: string;
-  quit: string;
   gas_price: string;
   addr: string;
   func: string;
@@ -139,7 +195,6 @@ export type OridinalMsg = {
 export type HashIdMsg = {
   module: string;
   parent: string;
-  quit: string;
   prevs: string[];
 
   gas_price: string;
@@ -157,10 +212,3 @@ export type FuncMsg = {
   ts: number;
   sig: string;
 };
-
-export enum BitcoinNetworkType {
-  FRACTAL_BITCOIN_MAINNET = "FRACTAL_BITCOIN_MAINNET",
-  FRACTAL_BITCOIN_TESTNET = "FRACTAL_BITCOIN_TESTNET",
-  BITCOIN_MAINNET = "BITCOIN_MAINNET",
-  BITCOIN_TESTNET = "BITCOIN_TESTNET",
-}

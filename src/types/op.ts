@@ -68,9 +68,9 @@ export type CommitOp = {
   op: OpType.commit;
   module: string; // "idxxxxi0"
   parent: string; // "xxxxi0"
-  quit: string; // "xxxxi0"
   gas_price: string; // "100"
   data: InscriptionFunc[];
+  swap_fee_rate?: string;
 };
 
 export type TransferOp = {

@@ -3,10 +3,19 @@ import Joi from "joi";
 import _ from "lodash";
 import { bn, bnDecimal, decimalCal } from "../contract/bn";
 import { Brc20 } from "../contract/brc20";
+import { getPairStructV2, getPairStrV1 } from "../contract/contract-utils";
 import { LP_DECIMAL, UNCONFIRM_HEIGHT } from "../domain/constant";
 import { isLp } from "../domain/utils";
 import { Req, Res } from "../types/route";
 import {
+  OpsCurStatsReq,
+  OpsCurStatsRes,
+  OpsRangeNetInflowReq,
+  OpsRangeNetInflowRes,
+  OpsRangeStatsReq,
+  OpsRangeStatsRes,
+  OpsTimeStatsReq,
+  OpsTimeStatsRes,
   StatusAssetsReq,
   StatusDepositMatching,
   StatusDepositReq,
@@ -28,6 +37,24 @@ const formatHeight = (height: number) => {
 };
 
 export function statusRoute(fastify: FastifyInstance, opts, done) {
+  // Cache for recordSwapDao.count queries to prevent repeated slow queries
+  const swapQueryCache = new Map();
+  const CACHE_TTL = 30000; // 30 seconds
+
+  const getCachedCount = (queryKey: string) => {
+    const cached = swapQueryCache.get(queryKey);
+    if (cached && Date.now() - cached.timestamp < CACHE_TTL) {
+      return cached.count;
+    }
+    return null;
+  };
+
+  const setCachedCount = (queryKey: string, count: number) => {
+    swapQueryCache.set(queryKey, {
+      count,
+      timestamp: Date.now(),
+    });
+  };
   fastify.get(
     `/liq`,
     schema(
@@ -117,10 +144,28 @@ export function statusRoute(fastify: FastifyInstance, opts, done) {
         query["ts"] = { $gte: Math.floor(startTime / 1000) };
       }
       if (endTime) {
-        query["ts"] = { $lte: Math.floor(endTime / 1000) };
+        if (query["ts"]) {
+          query["ts"]["$lte"] = Math.floor(endTime / 1000);
+        } else {
+          query["ts"] = { $lte: Math.floor(endTime / 1000) };
+        }
+      }
+      // Always add time range filter to avoid full collection scan
+      if (!query["ts"]) {
+        const defaultStartTime = Math.floor(
+          (Date.now() - 30 * 24 * 3600 * 1000) / 1000
+        ); // Last 30 days
+        query["ts"] = { $gte: defaultStartTime };
       }
       const display = displayResult ? 1 : 0;
-      const total = await recordSwapDao.count(query);
+
+      // Use estimated count for better performance when accuracy is not critical
+      const queryKey = JSON.stringify(query);
+      let total = getCachedCount(queryKey);
+      if (total === null) {
+        total = await recordSwapDao.estimatedCount(query);
+        setCachedCount(queryKey, total);
+      }
       const list = await recordSwapDao.find(query, {
         limit,
         skip: start,
@@ -469,7 +514,10 @@ export function statusRoute(fastify: FastifyInstance, opts, done) {
     async (req: Req<StatusStatusReq, "get">, res) => {
       metric.committing.set(sender.Committing ? 1 : 0);
       metric.isRestoring.set(builder.IsResetPendingSpace ? 1 : 0);
-      metric.tryCommitCount.set(sender.TryCommitCount);
+      metric.commitFailCount.set(sender.CommitFailCount);
+      metric.verifyFailCount.set(operator.VerifyFailCount);
+      metric.lastCommitTime.set(operator.LastCommitTime);
+      metric.firstAggregateTimestamp.set(operator.FirstAggregateTimestamp);
 
       const ids = await operator.getUnConfirmedOpCommitIds();
       metric.notInEventList.set(ids.length);
@@ -498,6 +546,95 @@ export function statusRoute(fastify: FastifyInstance, opts, done) {
 
       metric.withdrawNum.set(withdrawNum);
       metric.withdrawErrorNum.set(withdrawErrorNum);
+      metric.curCommitFuncNum.set(operator.NewestCommitData.op.data.length);
+
+      for (const pid in stakePoolMgr.poolMap) {
+        const stakePool = stakePoolMgr.poolMap[pid];
+
+        const stakingPoolBalance = parseFloat(
+          bnDecimal(
+            operator.PendingSpace.Assets.getBalance(
+              stakePool.wallet.address,
+              stakePool.rewardTick
+            ),
+            decimal.get(stakePool.rewardTick)
+          )
+        );
+        metric.stakingPoolBalance.set(
+          { pid: stakePool.pid },
+          stakingPoolBalance
+        );
+
+        const expectedDistributeRewards =
+          parseFloat(stakePool.getDistributedReward()) +
+          parseFloat(stakePool.getExtractDistributedReward());
+        metric.expectedDistributeRewards.set(
+          { pid: stakePool.pid },
+          expectedDistributeRewards
+        );
+
+        const start = Math.max(env.NewestHeight, stakePool.StartBlock);
+        const expectedRemainRewards = decimalCal([
+          Math.max(stakePool.EndBlock - start, 0),
+          "mul",
+          stakePool.FbPerBlock,
+        ]);
+        metric.expectedRemainRewards.set(
+          { pid: stakePool.pid },
+          parseFloat(expectedRemainRewards)
+        );
+
+        let accRewards = "0";
+        for (const address in stakePool.UserInfo) {
+          const user = stakePool.UserInfo[address];
+          accRewards = decimalCal([
+            accRewards,
+            "add",
+            user.rewardClaimed || "0",
+            "add",
+            user.rewardUnclaimed,
+          ]);
+        }
+        metric.realDistributeRewards.set(
+          { pid: stakePool.pid },
+          parseFloat(accRewards)
+        );
+      }
+
+      const data = await query.getAllBalance({
+        address: env.ModuleInitParams.gas_to,
+        pubkey: "",
+      });
+      for (const tick in data) {
+        const item = data[tick];
+        metric.gasBalance.set({ tick }, parseFloat(item.balance.swap));
+      }
+
+      const data2 = await assetDao.find({
+        address: env.ModuleInitParams.fee_to,
+      });
+      for (let i = 0; i < data2.length; i++) {
+        const item = data2[i];
+        if (isLp(item.tick)) {
+          const { tick0, tick1 } = getPairStructV2(item.tick);
+          const pair = getPairStrV1(tick0, tick1);
+
+          const res = await operator.quoteRemoveLiq({
+            address: "",
+            tick0,
+            tick1,
+            lp: bnDecimal(item.balance, LP_DECIMAL),
+          });
+          metric.lpTickBalance.set(
+            { pair, tick: tick0 },
+            parseFloat(res.amount0)
+          );
+          metric.lpTickBalance.set(
+            { pair, tick: tick1 },
+            parseFloat(res.amount1)
+          );
+        }
+      }
 
       res.headers["content-type"] = metric.register.contentType;
       void res.send(await metric.register.metrics());
@@ -607,6 +744,63 @@ export function statusRoute(fastify: FastifyInstance, opts, done) {
         lastAggregateTimestamp: operator.LastAggregateTimestamp,
         apiStatistic,
       };
+      void res.send(ret);
+    }
+  );
+
+  fastify.get(
+    `/ops_range_stats`,
+    schema(
+      Joi.object<OpsRangeStatsReq>({
+        startTime: Joi.number(),
+        endTime: Joi.number(),
+        sort: Joi.string().default("rangeVolumeValue"),
+      }),
+      "get"
+    ),
+    async (req: Req<OpsRangeStatsReq, "get">, res: Res<OpsRangeStatsRes>) => {
+      const ret = await opsStats.getRangeOpsStats(req.query);
+      void res.send(ret);
+    }
+  );
+
+  fastify.get(
+    `/ops_cur_stats`,
+    schema(Joi.object<OpsCurStatsReq>({}), "get"),
+    async (req: Req<OpsCurStatsReq, "get">, res: Res<OpsCurStatsRes>) => {
+      const ret = await opsStats.getCurOpsStats("24h");
+      void res.send(ret);
+    }
+  );
+
+  fastify.get(
+    `/ops_time_stats`,
+    schema(
+      Joi.object<OpsTimeStatsReq>({
+        timestamp: Joi.number().required(),
+      }),
+      "get"
+    ),
+    async (req: Req<OpsTimeStatsReq, "get">, res: Res<OpsTimeStatsRes>) => {
+      const ret = await opsStats.getTimeOpsStats(req.query);
+      void res.send(ret);
+    }
+  );
+
+  fastify.get(
+    `/ops_range_net_inflow`,
+    schema(
+      Joi.object<OpsRangeNetInflowReq>({
+        startTime: Joi.number(),
+        endTime: Joi.number(),
+      }),
+      "get"
+    ),
+    async (
+      req: Req<OpsRangeNetInflowReq, "get">,
+      res: Res<OpsRangeNetInflowRes>
+    ) => {
+      const ret = await opsStats.getRangeOpsNetInflow(req.query);
       void res.send(ret);
     }
   );

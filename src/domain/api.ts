@@ -1,31 +1,55 @@
-import { default as Axios, AxiosInstance } from "axios";
-import { config } from "../config";
-import { bn } from "../contract/bn";
+import { AxiosInstance } from "axios";
 import {
-  Brc20AddressBalance,
+  BridgeConfigRes,
+  BridgeConfirmDepositReq,
+  BridgeConfirmWithdrawReq,
+  BridgeCreateDepositReq,
+  BridgeCreateWithdrawReq,
+  BridgeHistoryReq,
+  BridgeTxStatusReq,
+  BridgeTxStatusRes,
+} from "../lib/bridge-api/types";
+import { TickerFilter } from "../lib/open-api/types";
+import {
+  AlkanesInfo,
+  AlkanesSummary,
+  AvailableBalanceRes,
+  BlockInfo,
   Brc20Info,
-  FeeEstimate,
-  FeeEstimateMempool,
-  InscriptionEventsRes,
+  Brc20Summary,
+  FreeQuotaSummaryRes,
+  HealthyStatus,
   ModuleInscriptionInfo,
   NFT,
+  PriceInfo,
+  RunesSummary,
   ToSignInput,
+  UseFreeQuotaReq,
+  UseFreeQuotaRes,
   UTXO,
+  UtxoData,
 } from "../types/api";
 import { Result } from "../types/func";
-import { loggerError, removeUndefined } from "../utils/utils";
-import { need } from "./utils";
+import { NetworkType } from "../types/route";
+import { removeUndefined } from "../utils/utils";
 
-const timeout = 30000;
-const TAG = "api";
+export const PRICE_TICKER_MAP = {
+  bBTC___: "",
+  sBTC___000: "",
+  bSATS_: "brc20/sats1000",
+  sSATS___000: "brc20/sats1000",
+  bORDI_: "brc20/ordi",
+  sORDI___000: "brc20/ordi",
+  sPIZZA___000: "brc20/pizza",
+  sFB___000: "fb",
+  bFB_____: "fb",
+};
 
 export class API {
   private cache: {
     [key: string]: { timestamp: number; intervalMs: number; data: any };
   } = {};
-  private internal: AxiosInstance;
-  private internal2: AxiosInstance;
-  private mempool: AxiosInstance;
+
   readonly statistic: { [key: string]: number[] } = {};
 
   tick() {
@@ -36,139 +60,167 @@ export class API {
     }
   }
 
-  constructor() {
-    this.internal = Axios.create({
-      baseURL: config.openApi.url,
-      timeout,
-      headers: Object.assign(
-        {
-          "Content-Type": "application/json",
-        },
-        {
-          ...(config.openApi.apiKey
-            ? { Authorization: `Bearer ${config.openApi.apiKey}` }
-            : {}),
-          ...(config.openApi.host ? { host: `${config.openApi.host}` } : {}),
-        }
-      ),
-    });
-    this.internal2 = Axios.create({
-      baseURL: config.openApi.url,
-      timeout,
-      headers: Object.assign(
-        {
-          "Content-Type": "application/json",
-        },
-        {
-          ...(config.openApi.apiKey
-            ? { Authorization: `Bearer ${config.openApi.apiKey}` }
-            : {}),
-          ...(config.openApi.host ? { host: `${config.openApi.host}` } : {}),
-        }
-      ),
-    });
+  constructor() {}
 
-    this.mempool = Axios.create({
-      baseURL: config.mempoolApi,
-      timeout,
-      headers: {
-        "Content-Type": "application/json",
-      },
-    });
-  }
-
-  async broadcast(txHex: string): Promise<string> {
-    const url = `${config.openApi.url}/local_pushtx`;
-    return await this.unisatPost("local_pushtx", url, { txHex });
-  }
-
-  async broadcast2(txHex: string): Promise<string> {
-    const url = `${config.openApi2.url}/local_pushtx`;
-
-    const data = await this.post("local_pushtx2", this.internal, url, {
-      txHex,
-    });
-    if (data?.code !== 0) {
-      throw new Error(data?.msg);
-    }
-    return data.data;
-  }
-
-  // async broadcastToMempool(txHex: string) {
-  //   const url = config.mempoolApi + `/api/tx`;
-  //   return (await this.mempool.post(url, txHex)) as any;
-  // }
-
-  async tickPrice(tick: string) {
-    tick = tick.toLowerCase();
-    if (config.fakeMarketPrice) {
-      return 1;
+  private async cacheRequest<T>(
+    key: string,
+    intervalMs: number,
+    requestFunc: () => Promise<T>
+  ): Promise<T> {
+    if (this.cache[key]) {
+      return this.cache[key].data;
     }
 
-    const key = `price: ${tick}`;
+    const ret = await requestFunc();
+    this.cache[key] = {
+      data: ret,
+      intervalMs,
+      timestamp: Date.now(),
+    };
+    return ret;
+  }
 
-    if (!this.cache[key]) {
-      const res = await this.unisatPost(
-        "auction/brc20_price",
-        `${config.openApi.url}/v3/market/brc20/auction/brc20_price`, // TOFIX
-        {
-          tick,
-        }
-      );
+  private getBridgeApi(networkType: NetworkType) {
+    if (networkType === NetworkType.FRACTAL_BITCOIN_MAINNET) {
+      return simpleBridgeAPI.fractal;
+    } else {
+      return simpleBridgeAPI.bitcoin;
+    }
+  }
 
-      this.cache[key] = {
-        data: res.midPrice || 0,
-        timestamp: Date.now(),
-        intervalMs: 300_000,
-      };
+  private getOpenAPI(network: NetworkType = null) {
+    if (!network) {
+      network = process.env.BITCOIN_NETWORK as any;
     }
 
-    return this.cache[key].data as number;
-  }
-
-  async tickInfo(tick: string): Promise<Brc20Info> {
-    const url = `${config.openApi.url}/brc20/${encodeURIComponent(tick)}/info`;
-    const key = url;
-    if (!this.cache[key]) {
-      const res = (await this.unisatGet("brc20/tick/info", url)) as Brc20Info;
-      this.cache[key] = {
-        data: res,
-        timestamp: Date.now(),
-        intervalMs: 300_000,
-      };
+    if (network == NetworkType.BITCOIN_MAINNET) {
+      return openAPI.bitcoin;
+    } else {
+      return openAPI.fractal;
     }
-    return this.cache[key].data;
   }
 
-  async tickBalance(address: string): Promise<Brc20AddressBalance> {
-    const url = `${config.openApi.url}/address/${address}/brc20/summary`;
-    return await this.unisatGet("address/brc20/summary", url, {
-      start: 0,
-      limit: 500,
-    });
+  async healthyStatus(): Promise<HealthyStatus> {
+    return this.getOpenAPI().getHealthz();
   }
 
-  async inscriptionInfo(inscriptionId: string): Promise<NFT> {
-    const url = `${config.openApi.url}/inscription/info/${inscriptionId}`;
-    return await this.unisatGet("inscription/info/inscriptionId", url);
-  }
-
-  async inscriptionContent(inscriptionId: string): Promise<string> {
-    const url = `${config.openApi.url}/inscription/content/${inscriptionId}`;
-    return await this.get(
-      "/inscription/content/inscriptionId",
-      this.internal,
-      url
+  async bridgeTxStatus(params: BridgeTxStatusReq, networkType: NetworkType) {
+    return this.cacheRequest<BridgeTxStatusRes>(
+      `bridgeTxStatus-${networkType}-${JSON.stringify(params)}`,
+      5_000,
+      async () => this.getBridgeApi(networkType).getTxStatus(params)
     );
   }
 
-  async utxo(txid: string, vout: number): Promise<UTXO> {
-    const url = `/utxo/${txid}/${vout}`;
-    const ret = await this.unisatGet("/utxo", url, {
-      txid,
-      vout,
+  async bridgeConfig(networkType: NetworkType): Promise<BridgeConfigRes> {
+    return this.cacheRequest<BridgeConfigRes>(
+      `bridgeConfig-${networkType}`,
+      60_000,
+      async () => this.getBridgeApi(networkType).getConfig()
+    );
+  }
+
+  async bridgeHistory(params: BridgeHistoryReq, networkType: NetworkType) {
+    return this.getBridgeApi(networkType).getHistory(params);
+  }
+
+  async createBridgeDeposit(
+    params: BridgeCreateDepositReq,
+    networkType: NetworkType
+  ) {
+    return this.getBridgeApi(networkType).createDeposit(params);
+  }
+
+  async confirmBridgeDeposit(
+    params: BridgeConfirmDepositReq,
+    networkType: NetworkType
+  ) {
+    return this.getBridgeApi(networkType).confirmDeposit(params);
+  }
+
+  async createBridgeWithdraw(
+    params: BridgeCreateWithdrawReq,
+    networkType: NetworkType
+  ) {
+    return this.getBridgeApi(networkType).createWithdraw(params);
+  }
+
+  async confirmBridgeWithdraw(
+    params: BridgeConfirmWithdrawReq,
+    networkType: NetworkType
+  ) {
+    return this.getBridgeApi(networkType).confirmWithdraw(params);
+  }
+
+  async broadcast(txHex: string): Promise<string> {
+    return this.getOpenAPI().localPushtx(txHex);
+  }
+
+  async brc20Info(
+    tick: string,
+    network: NetworkType = null
+  ): Promise<Brc20Info> {
+    return this.cacheRequest<Brc20Info>(
+      `brc20Info-${network}-${tick}`,
+      300_000,
+      async () => this.getOpenAPI(network).getBrc20TickerInfo(tick)
+    );
+  }
+
+  async brc20Summary(
+    address: string,
+    network: NetworkType = null
+  ): Promise<Brc20Summary> {
+    return this.getOpenAPI(network).getAddressBrc20Summary({
+      address,
+      start: 0,
+      limit: 500,
+      ticker_filter: TickerFilter.ALL,
     });
-    return ret;
+  }
+
+  async runesSummary(
+    address: string,
+    network: NetworkType = null
+  ): Promise<RunesSummary> {
+    return this.getOpenAPI(network).getAddressRunesBalanceList(address, 0, 500);
+  }
+
+  async alkanesSummary(
+    address: string,
+    network: NetworkType = null
+  ): Promise<AlkanesSummary> {
+    return this.getOpenAPI(network).getAddressAlkanesTokenList(address, 0, 500);
+  }
+
+  async alkanesInfo(
+    alkaneid: string,
+    network: NetworkType = null
+  ): Promise<AlkanesInfo> {
+    return this.cacheRequest<AlkanesInfo>(
+      `alkanesInfo-${network}-${alkaneid}`,
+      300_000,
+      async () => this.getOpenAPI(network).getAlkanesInfo(alkaneid)
+    );
+  }
+
+  async availableBalance(
+    address: string,
+    network: NetworkType = null
+  ): Promise<AvailableBalanceRes> {
+    return await this.getOpenAPI(network).getAddressAvailableBalance(address);
+  }
+
+  async inscriptionInfo(inscriptionId: string): Promise<NFT> {
+    return await this.getOpenAPI().getInscriptionInfo(inscriptionId);
+  }
+
+  async inscriptionContent(inscriptionId: string): Promise<string> {
+    return await this.getOpenAPI().getInscriptionContent(inscriptionId);
+  }
+
+  async utxo(txid: string, vout: number): Promise<UTXO> {
+    return await this.getOpenAPI().getUtxo(txid, vout);
   }
 
   async addressUTXOs(
@@ -176,76 +228,69 @@ export class API {
     cursor?: number,
     size?: number
   ): Promise<UTXO[]> {
-    const url = `${config.openApi.url}/address/${address}/utxo`;
-    const ret = (await this.unisatGet("address/utxo", url, {
+    const ret = (await this.getOpenAPI().getAddressAvailableUtxo(
+      address,
       cursor,
-      size,
-    })) as any[];
-    return ret.reverse();
+      size
+    )) as UtxoData;
+    return ret.utxo.reverse();
   }
 
-  // async rawTx(txid: string): Promise<string> {
-  //   const url = `api/tx/${txid}/hex`;
-  //   return await this.get(this.blockStream, url);
-  // }
-
   async txInfo(txid: string): Promise<{ height: number; timestamp: number }> {
-    const url = `${config.openApi.url}/tx/${txid}`;
-    const key = url;
-    if (!this.cache[key]) {
-      const res = await this.unisatGet("tx/txid", url);
-      this.cache[key] = {
-        data: res,
-        timestamp: Date.now(),
-        intervalMs: 10_000,
-      };
-    }
-    return this.cache[key].data;
+    return this.cacheRequest<{ height: number; timestamp: number }>(
+      `getTxInfo-${txid}`,
+      10_000,
+      async () => this.getOpenAPI().getTx(txid)
+    );
   }
 
   async feeRate(): Promise<number> {
-    const url = `/api/v1/fees/recommended`;
-    const key = url;
-    if (!this.cache[key]) {
-      let ret = 0;
-      try {
-        const res = (await this.get(
-          "/api/v1/fees/recommended",
-          this.mempool,
-          url
-        )) as FeeEstimateMempool;
-        ret = res.fastestFee;
-        need(bn(ret).gt("0"));
-      } catch (err) {
-        loggerError("network-mempool", err);
-        const url = `${config.openApi.url}/fee-estimate`;
-        const res = (await this.unisatGet("fee-estimate", url)) as FeeEstimate;
-        ret = res.BlocksFeeRateEstimate[0].feerate;
-        need(bn(ret).gt("0"));
-      }
-
-      this.cache[key] = {
-        data: ret,
-        timestamp: Date.now(),
-        intervalMs: 60_000,
-      };
-    }
-    return this.cache[key].data as number;
+    return this.cacheRequest<number>(`feeRate`, 60_000, async () => {
+      const ret = await this.getOpenAPI().getFeesRecommended();
+      return ret.fastestFee;
+    });
   }
 
-  async blockHeight() {
-    const url = `${config.openApi.url}/brc20/bestheight`;
-    type Res = {
-      height: number;
-    };
-    const ret = ((await this.unisatGet("brc20/bestheight", url)) as Res).height;
+  async bestHeight() {
+    const ret = await this.getOpenAPI().getBrc20BestHeight();
+    return ret.height;
+  }
+
+  async blockInfo(): Promise<BlockInfo> {
+    const ret = await this.getOpenAPI().getBlockChainInfo();
     return ret;
   }
 
-  async btcPrice() {
-    const url = `${config.openApi.url}/fee-estimate`;
-    const res = (await this.unisatGet("fee-estimate", url)) as FeeEstimate;
-    return res.BTCPrice;
+  async coinmarketcapPriceInfo(tick: string): Promise<PriceInfo> {
+    return this.cacheRequest<PriceInfo>(
+      `coinmarketcapPriceInfo-${tick}`,
+      60_000,
+      async () => {
+        if (tick == "sSUSD___000") {
+          return {
+            price: 1,
+            updateTime: Date.now(),
+          };
+        }
+
+        const tickPath = PRICE_TICKER_MAP[tick];
+        if (tickPath == undefined) {
+          return {
+            price: 0,
+            updateTime: Date.now(),
+          };
+        }
+
+        if (tickPath == "") {
+          return this.getOpenAPI().getBitcoinPrice();
+        }
+        const res = await this.getOpenAPI().getTickerPrice(tickPath);
+        if (tickPath == "/brc20/sats1000") {
+          res.price = res.price / 1000;
+        }
+        return res;
+      }
+    );
   }
 
   async eventRawList(params: {
@@ -253,60 +298,21 @@ export class API {
     cursor: number;
     size: number;
   }) {
-    const query = {
-      // start: params.start,
-      // end: params.end,
-      cursor: params.cursor,
-      size: params.size,
-    };
-    const url = `${config.openApi.url}/brc20-module/${params.moduleId}/history`;
-    const ret = (await this.unisatGet(
-      "/brc20-module/moduleId/history",
-      url,
-      query
-    )) as InscriptionEventsRes;
-    return ret;
+    return this.getOpenAPI().getBrc20ModuleHistory(
+      params.moduleId,
+      params.cursor,
+      params.size
+    );
   }
 
   async moduleInscriptionInfo(
     inscriptionId: string
   ): Promise<ModuleInscriptionInfo> {
-    const url = `${config.openApi.url}/brc20-module/inscription/info/${inscriptionId}`;
-    return this.unisatGet("brc20-module/inscription/info/inscriptionId", url);
+    return this.getOpenAPI().getBrc20ModuleInscriptionInfo(inscriptionId);
   }
 
-  async createOrder(content: string) {
-    const url = `/v2/inscribe/order/create`;
-    const ret = await this.unisatPost("order/create", url, content as any);
-    return ret;
-  }
-
-  async commitVerify(params: {
-    commits: string[];
-    results: Result[];
-  }): Promise<{
-    critical: boolean;
-    valid: boolean;
-    index?: number;
-    id?: string;
-    message?: string;
-  }> {
-    const url = `${config.openApi.url}/brc20-module/verify-commit`;
-    // return { valid: true };
-    const ret = await this.unisatPost(
-      "brc20-module/verify-commit",
-      url,
-      params
-    );
-    logger.info({
-      tag: TAG,
-      msg: "commit-verify-info",
-      length: params.commits.length,
-      results: params.results,
-      commits: params.commits,
-      ret,
-    });
-    return ret;
+  async commitVerify(params: { commits: string[]; results: Result[] }) {
+    return this.getOpenAPI().verifyBrc20ModuleCommit(params);
   }
 
   private async get(
@@ -370,34 +376,29 @@ export class API {
     }
   }
 
-  private async unisatGet(tag: string, url: string, query?: object) {
-    const data = await this.get(tag, this.internal, url, query);
-
-    if (data?.code !== 0) {
-      throw new Error(data?.msg);
-    }
-    return data.data;
+  async freeQuotaSummary(address: string): Promise<FreeQuotaSummaryRes> {
+    // TODO
+    return {
+      address,
+      tick: "",
+      totalQuota: "",
+      usedQuota: "",
+      btcFbRate: 0,
+      hasVoucher: false,
+    };
   }
 
-  private async unisatPost(
-    tag: string,
-    url: string,
-    body?: object
-  ): Promise<any> {
-    body = body ?? {};
-
-    const data = await this.post(tag, this.internal, url, body);
-    if (data?.code !== 0) {
-      throw new Error(data?.msg);
-    }
-    return data.data;
+  async useFreeQuota(params: UseFreeQuotaReq): Promise<UseFreeQuotaRes> {
+    // TODO
+    return {};
   }
 
   async signByKeyring(
-    key: string,
+    tag: string,
     psbtHex: string,
     toSignInputs: ToSignInput[]
-  ): Promise<string> {
-    throw new Error("not implemented");
+  ) {
+    // TODO
+    return "";
   }
 }

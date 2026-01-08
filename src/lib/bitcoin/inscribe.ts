@@ -1,4 +1,5 @@
 import { Tapleaf, Taptree } from "bitcoinjs-lib/src/types";
+import { DUST294 } from "../../domain/constant";
 import { UTXO } from "../../types/api";
 import { TAPLEAF_VERSION } from "./const";
 import { bitcoin } from "./core";
@@ -90,6 +91,7 @@ export function generateInscribeTx({
   paymentUtxo,
   inscriptionValue,
   change,
+  dust600,
 }: {
   inscribeWallet: Wallet;
   content: string;
@@ -100,6 +102,7 @@ export function generateInscribeTx({
     address: string;
     value: number;
   };
+  dust600: boolean;
 }) {
   const internalPubkey = toXOnly(inscribeWallet.publicKey);
   const leafPrivkey = inscribeWallet.signer;
@@ -128,12 +131,19 @@ export function generateInscribeTx({
   psbt.addOutput({
     address: toAddress,
     value: inscriptionValue,
-  });
+  }); // o0
 
   if (change) {
     psbt.addOutput({
       address: change.address,
       value: change.value,
+    });
+  }
+
+  if (dust600) {
+    psbt.addOutput({
+      address: keyring.accelerateWallet.address,
+      value: DUST294,
     });
   }
 

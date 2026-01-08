@@ -148,3 +148,59 @@ export type StatusStatusRes = {
     };
   };
 };
+
+export type OpsRangeStatsReq = {
+  startTime: number;
+  endTime: number;
+  sort:
+    | "rangeVolumeValue"
+    | "rangeLpAddressCount"
+    | "rangeSwapAddressCount"
+    | "rangeLockedLpValue"
+    | "rangeLockedLpAddress";
+};
+
+export type OpsRangeStatsRes = {
+  pair: string;
+  // range
+  rangeVolumeValue: number;
+  rangeLpAddressCount: number;
+  rangeSwapAddressCount: number;
+  rangeLockedLpValue: number;
+  rangeLockedLpAddress: number;
+}[];
+
+export type OpsRangeNetInflowReq = {
+  startTime: number;
+  endTime: number;
+};
+
+export type OpsRangeNetInflowRes = {
+  tick: string;
+  deposit: number;
+  withdraw: number;
+  netInflow: number;
+  value: number;
+}[];
+
+export type OpsCurStatsReq = {};
+
+export type OpsCurStatsRes = {
+  pair: string;
+  totalVolumeValue: number;
+  totalTvlValue: number;
+  lpAddressMap: { [lockedLpValue: string]: number };
+  totalLockedLpValue: number;
+}[];
+
+export type OpsTimeStatsReq = {
+  timestamp: number;
+};
+
+export type OpsTimeStatsRes = {
+  pair: string;
+  totalVolumeValue: number;
+  totalTvlValue: number;
+  lpAddressMap: { [lockedLpValue: string]: number };
+  totalLockedLpValue: number;
+}[];

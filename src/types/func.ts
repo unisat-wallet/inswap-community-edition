@@ -11,6 +11,9 @@ export enum FuncType {
   swap = "swap",
   removeLiq = "removeLiq",
   decreaseApproval = "decreaseApproval",
+  lock = "lock",
+  unlock = "unlock",
+  claim = "claim",
   send = "send",
   sendLp = "sendLp",
 }
@@ -77,6 +80,18 @@ export type RemoveLiqParams =
 
 export type DecreaseApprovalParams = [string /** orid */, string /** 100 */];
 
+export type LockParams = [
+  string /** tick0 */,
+  string /** tick1 */,
+  string /** 100 */
+];
+
+export type UnlockParams = [
+  string /** tick0 */,
+  string /** tick1 */,
+  string /** 100 */
+];
+
 export type RemoveLiqIn = {
   address: string;
   lp: string;
@@ -92,6 +107,8 @@ export type RemoveLiqOut = {
   tick1: string;
   amount0: string;
   amount1: string;
+  reward0?: string;
+  reward1?: string;
 };
 
 export type SwapParams =
@@ -112,6 +129,13 @@ export type SwapParams =
       string /** 12.34 */,
       string /** 0.005 */
     ];
+
+export type SendLpParams = [
+  string /** address */,
+  string /** ordi */,
+  string /** sats */,
+  string /** 100 */
+];
 
 export type SendParams = [
   string /** address */,
@@ -160,6 +184,22 @@ export type SendIn = {
 
 export type SendOut = {};
 
+export type LockIn = {
+  address: string; // unified field
+  tick: string;
+  amount: string;
+};
+
+export type LockOut = {};
+
+export type UnlockIn = {
+  address: string; // unified field
+  tick: string;
+  amount: string;
+};
+
+export type UnlockOut = {};
+
 export type DecreaseApprovalIn = {
   address: string;
   tick: string;
@@ -195,7 +235,15 @@ export type FuncArr =
     }
   | {
       func: FuncType.sendLp;
-      params: SendParams;
+      params: SendLpParams;
+    }
+  | {
+      func: FuncType.lock;
+      params: LockParams;
+    }
+  | {
+      func: FuncType.unlock;
+      params: UnlockParams;
     };
 
 export type FuncMap =
@@ -226,6 +274,14 @@ export type FuncMap =
   | {
       func: FuncType.sendLp;
       params: SendIn;
+    }
+  | {
+      func: FuncType.lock;
+      params: LockIn;
+    }
+  | {
+      func: FuncType.unlock;
+      params: UnlockIn;
     };
 
 export type ContractResult =
@@ -235,6 +291,7 @@ export type ContractResult =
       preResult: Result;
       result: Result;
       gas: string;
+      success: boolean;
     }
   | {
       func: FuncType.addLiq;
@@ -242,6 +299,7 @@ export type ContractResult =
       preResult: Result;
       result: Result;
       gas: string;
+      success: boolean;
     }
   | {
       func: FuncType.swap;
@@ -249,6 +307,7 @@ export type ContractResult =
       preResult: Result;
       result: Result;
       gas: string;
+      success: boolean;
     }
   | {
       func: FuncType.removeLiq;
@@ -256,6 +315,7 @@ export type ContractResult =
       preResult: Result;
       result: Result;
       gas: string;
+      success: boolean;
     }
   | {
       func: FuncType.decreaseApproval;
@@ -263,6 +323,7 @@ export type ContractResult =
       preResult: Result;
       result: Result;
       gas: string;
+      success: boolean;
     }
   | {
       func: FuncType.send;
@@ -270,6 +331,7 @@ export type ContractResult =
       preResult: Result;
       result: Result;
       gas: string;
+      success: boolean;
     }
   | {
       func: FuncType.sendLp;
@@ -277,6 +339,7 @@ export type ContractResult =
       preResult: Result;
       result: Result;
       gas: string;
+      success: boolean;
     };
 
 export type Result = {
@@ -284,6 +347,7 @@ export type Result = {
     address: string;
     tick: string;
     balance: string;
+    lockedBalance?: string;
   }[];
   pools?: {
     pair: string;
@@ -291,6 +355,13 @@ export type Result = {
     reserve1: string;
     lp: string;
   }[];
+};
+
+export type SendLpResult = {
+  amount0: string;
+  amount1: string;
+  lp: string;
+  value: number;
 };
 
 export type InscriptionFunc = FuncMsg;
@@ -348,6 +419,22 @@ export type InternalFunc =
       id: string;
       func: FuncType.sendLp;
       params: SendIn;
+      prevs: string[];
+      ts: number;
+      sig: string;
+    }
+  | {
+      id: string;
+      func: FuncType.lock;
+      params: LockIn;
+      prevs: string[];
+      ts: number;
+      sig: string;
+    }
+  | {
+      id: string;
+      func: FuncType.unlock;
+      params: UnlockIn;
       prevs: string[];
       ts: number;
       sig: string;

@@ -10,6 +10,7 @@ export enum CodeEnum {
   exceeding_slippage = -8,
   tick_disable = -9,
   signature_fail = -10,
+  system_recovery_in_progress = -11,
 }
 
 export class CodeError extends Error {
@@ -18,6 +19,10 @@ export class CodeError extends Error {
     super(message);
     this.code = code;
   }
+}
+
+export function paramsMissing(params: string) {
+  return "Params missing: " + params;
 }
 
 // The error occurred due to the user's abnormal operation, such as an invalid input.
@@ -104,7 +109,7 @@ export const insufficient_confirmed_btc = `Insufficient confirmed ${BITCOIN_NAME
 
 export const duplicate_operation = "Duplicate operation.";
 
-export const cant_opt = "The current operation cannot perform";
+export const cant_opt = "The current feature is not yet available";
 
 export const specified_address = "Only supports sending to a specified address";
 
@@ -114,3 +119,37 @@ export const indexer_error = "Index request error, please try again later.";
 
 export const wait_for_rollup =
   "Waiting for the rollup inscription to be indexed and received";
+
+export const liquidity_too_low = "The added liquidity is too low";
+
+export const current_operations_are_not_allowed =
+  "Current operations are not allowed, please wait a moment";
+
+export const fee_tick_invalid = "Invalid fee tick";
+
+export const params_error =
+  "Parameter error, please refresh the page and try again";
+
+export const stake_pool_not_exist = "Rewards not available";
+
+export const claimable_zero = "The current claimable amount is 0";
+
+export const staking_over = "The LP Fest activity has ended";
+
+export const staking_not_start = "The LP Fest activity has not started";
+
+export const staking_pool_balance_not_enough =
+  "Insufficient balance in the LPfest. Please contact us for support.";
+
+export const exception_locked_amount = "Abnormal locked amount";
+
+export const withdraw_too_low = "Withdraw amount too low";
+
+export const ticker_need_3_confirmations =
+  "Need to ensure that both tickets have 3 confirmations";
+
+export const invalid_time_uint = "Invalid time uint";
+
+export const invalid_lock_day = "Invalid lock day";
+
+export const invalid_multi_swap_params = "Invalid multi swap params";

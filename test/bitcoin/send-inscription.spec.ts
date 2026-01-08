@@ -53,6 +53,7 @@ describe("send-inscription", () => {
         type: "address",
         address: inscriptionWallet.address,
       },
+      dust600: false,
     });
 
     const psbt = bitcoin.Psbt.fromHex(result.psbtHex, { network });
@@ -104,6 +105,7 @@ describe("send-inscription", () => {
         type: "opreturn",
         opreturnData,
       },
+      dust600: false,
     });
 
     const psbt = bitcoin.Psbt.fromHex(result.psbtHex, { network });

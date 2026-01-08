@@ -32,8 +32,15 @@ import {
   OpType,
 } from "../../../src/types/op";
 // import { Contract } from "../../contract";
+import BigNumber from "bignumber.js";
+import { Brc20 } from "../../../src/contract/brc20";
 import { Contract } from "../../../src/contract/contract";
-import { Decimal } from "./decimal";
+import {
+  convertFuncInscription2Internal,
+  convertFuncInternal2Inscription,
+} from "../../../src/domain/convert-struct";
+import { Decimal } from "../../../src/domain/decimal";
+// import { Decimal } from "./decimal";
 
 const updateHeight1 = 1;
 
@@ -43,7 +50,38 @@ export class ContractValidator {
   private moduleInitParams: ModuleOp["init"];
   private gas_to: string;
 
-  readonly results: any[] = [];
+  public results: any[] = [];
+
+  static fromJSONString(str: string) {
+    const validator = new ContractValidator();
+    const data = JSON.parse(str);
+
+    const assetsMap = data.contract.assets.map;
+    for (let assetType in assetsMap) {
+      for (let tick in assetsMap[assetType]) {
+        const brc20Data = assetsMap[assetType][tick];
+        const brc20 = new Brc20(
+          brc20Data.balance,
+          tick,
+          brc20Data.supply,
+          assetType
+        );
+        assetsMap[assetType][tick] = brc20;
+      }
+    }
+
+    validator.contract = new Contract(
+      new Assets(assetsMap),
+      data.contract.status,
+      data.contract.config
+    );
+
+    validator.decimal = Decimal.fromData(data.decimal);
+    validator.moduleInitParams = data.moduleInitParams;
+    validator.gas_to = data.gas_to;
+
+    return validator;
+  }
 
   get Contract() {
     return this.contract;
@@ -81,7 +119,6 @@ export class ContractValidator {
         lastData = {
           module: op.module,
           parent: op.parent,
-          quit: op.quit,
           gas_price: op.gas_price,
           addr: lastFunc.addr,
           func: lastFunc.func,
@@ -198,7 +235,7 @@ export class ContractValidator {
             address: lastFunc.addr,
             tickIn: exactType == ExactType.exactIn ? tick : tickOther,
             tickOut: exactType == ExactType.exactOut ? tick : tickOther,
-            amount: bnUint(params[3], this.decimal.get(params[1])),
+            amount: bnUint(params[3], this.decimal.get(params[0])),
             exactType,
             expect: bnUint(params[5], expectDecimal),
             slippage1000: bnUint(params[6], "3"),
@@ -392,7 +429,7 @@ export class ContractValidator {
     }
   }
 
-  calculateServerFee(gasPrice: number, funcLength: number) {
+  calculateServerFee(gasPrice: string, funcLength: number) {
     return decimalCal(
       [gasPrice, "mul", funcLength],
       this.decimal.get(this.moduleInitParams.gas_tick)
@@ -402,7 +439,11 @@ export class ContractValidator {
   constructor() {}
 
   handleEvents(eventsData: InscriptionEventsRes, decimalData) {
-    this.decimal = new Decimal(decimalData);
+    global.decimal = new Decimal();
+    for (var id in decimalData) {
+      global.decimal.set(id, decimalData[id]);
+    }
+    this.decimal = decimal;
     for (let i = 0; i < eventsData.detail.length; i++) {
       const item = eventsData.detail[i];
       if (!item.valid) {
@@ -446,6 +487,7 @@ export class ContractValidator {
             pendingAvailable: {},
             approve: {},
             conditionalApprove: {},
+            lock: {},
           }),
           {
             kLast: {},
@@ -467,14 +509,14 @@ export class ContractValidator {
       } else if (event.op.op == OpType.commit) {
         for (let j = 0; j < event.op.data.length; j++) {
           try {
-            const func = this.convertFuncInscription2Internal(
+            const func = convertFuncInscription2Internal(
               j,
               event.op,
               event.height
             );
             this.aggregate(
               func,
-              parseFloat(event.op.gas_price),
+              event.op.gas_price,
               event.inscriptionId,
               j,
               event.height
@@ -510,7 +552,7 @@ export class ContractValidator {
 
   aggregate(
     func: InternalFunc,
-    gasPrice: number,
+    gasPrice: string,
     commit: string,
     index: number,
     height: number
@@ -518,7 +560,7 @@ export class ContractValidator {
     let funcLength: number;
     if (height < updateHeight1) {
       funcLength = this.getFuncInternalLength(
-        this.convertFuncInternal2Inscription(func, height)
+        convertFuncInternal2Inscription(func, height)
       );
     } else {
       funcLength = 1;
@@ -534,7 +576,7 @@ export class ContractValidator {
     };
 
     // fee
-    if (gasPrice > 0) {
+    if (BigNumber(gasPrice).gt(0)) {
       this.contract.send(sendParams);
     }
 
@@ -546,9 +588,11 @@ export class ContractValidator {
     } else if (func.func == FuncType.addLiq) {
       out = this.contract.addLiq(func.params);
     } else if (func.func == FuncType.swap) {
-      out = this.contract.swap(func.params);
+      out = this.contract.swap(func.params, undefined);
     } else if (func.func == FuncType.removeLiq) {
       out = this.contract.removeLiq(func.params);
+    } else if (func.func == FuncType.send) {
+      out = this.contract.send(func.params);
     } else if (func.func == FuncType.decreaseApproval) {
       const { address, tick, amount } = func.params;
       this.contract.assets.convert(
@@ -561,7 +605,7 @@ export class ContractValidator {
       out = { id: func.id };
     }
 
-    this.results.push(this.genResult({ commit, function: index }));
+    // this.results.push(this.genResult({ commit, function: index }));
   }
 
   isLp(tick: string) {

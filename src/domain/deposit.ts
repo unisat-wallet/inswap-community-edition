@@ -12,6 +12,7 @@ import { indexer_error, insufficient_btc } from "./error";
 import {
   checkAccess,
   checkAddressType,
+  checkTick,
   filterDustUTXO,
   getDust,
   getInputAmount,
@@ -44,9 +45,10 @@ export class Deposit {
     const allUTXOs = filterDustUTXO(await api.addressUTXOs(address));
     need(allUTXOs.length > 0, insufficient_btc);
     const inscription = await api.inscriptionInfo(inscriptionId);
+    checkTick(inscription?.brc20?.tick);
     const dust = getDust(address);
 
-    const feeRate = env.FeeRate;
+    const feeRate = req.feeRate || env.FeeRate;
     const utxos = getMinUTXOs(allUTXOs, 1, 1, feeRate);
 
     const vpsbt = new VPsbt();
@@ -79,7 +81,7 @@ export class Deposit {
    * Broadcast the transaction. (Send TRANSFER to the module)
    */
   async confirm(
-    req: ConfirmDepositReq & { transferIndex?: number },
+    req: Partial<ConfirmDepositReq> & { transferIndex?: number },
     type: DepositType = "direct"
   ): Promise<ConfirmDepositRes> {
     const psbt = Psbt.fromHex(req.psbt, { network });
@@ -96,7 +98,7 @@ export class Deposit {
       "the transaction on the chain is pending confirmation, please try again later"
     );
 
-    const tx = psbt.extractTransaction();
+    const tx = psbt.extractTransaction(true);
     await api.broadcast(tx.toHex());
 
     const txid = tx.getId();
@@ -111,7 +113,7 @@ export class Deposit {
       txid,
       type,
     };
-    await depositDao.upsertData(data);
+    await depositDao.upsertDataByInscriptionId(data);
 
     return { txid, pendingNum: config.pendingDepositDirectNum };
   }

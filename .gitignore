@@ -10,3 +10,4 @@ output
 *.ignore.*
 ignore/
 conf/config.json
+.idea

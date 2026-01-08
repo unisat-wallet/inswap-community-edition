@@ -239,7 +239,7 @@ export class Matching {
   }
 
   async init() {
-    const withdrawList = await withdrawDao.findAll();
+    const withdrawList = await withdrawDao.find({ type: "conditional" });
     for (let i = 0; i < withdrawList.length; i++) {
       this.updateByWithdraw(withdrawList[i]);
     }

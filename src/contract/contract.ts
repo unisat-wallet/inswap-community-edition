@@ -37,7 +37,11 @@ const feeOn = true;
 const feeRate = "6";
 
 export const AssetsClass = Assets;
-export type NotifyKlastData = { tick: string; value: string };
+export type NotifyKlastData = {
+  tick: string;
+  address: string;
+  k: string;
+};
 
 export class Contract {
   readonly assets: Assets;
@@ -83,7 +87,7 @@ export class Contract {
       tick1,
     });
 
-    if (this.assets.get(pair).Supply == "0") {
+    if (this.assets.getSwapSupply(pair) == "0") {
       const lp = uintCal([amount0, "mul", amount1, "sqrt"]);
 
       // ensure there is always liquidity in the pool
@@ -117,7 +121,8 @@ export class Contract {
         if (this.observer) {
           this.observer.notify<NotifyKlastData>("klast", {
             tick: pair,
-            value: this.status.kLast[pair],
+            k: this.status.kLast[pair],
+            address: params.address,
           });
         }
       }
@@ -127,7 +132,7 @@ export class Contract {
       let amount0Adjust: string;
       let amount1Adjust: string;
 
-      const poolLp = this.assets.get(pair).Supply;
+      const poolLp = this.assets.getSwapSupply(pair);
       const poolAmount0 = this.assets.get(tick0).balanceOf(pair);
       const poolAmount1 = this.assets.get(tick1).balanceOf(pair);
 
@@ -183,7 +188,8 @@ export class Contract {
         if (this.observer) {
           this.observer.notify<NotifyKlastData>("klast", {
             tick: pair,
-            value: this.status.kLast[pair],
+            k: this.status.kLast[pair],
+            address: params.address,
           });
         }
       }
@@ -209,7 +215,7 @@ export class Contract {
     const pair = getPairStrV2(tick0, tick1);
     need(!!this.assets.isExist(pair), pool_not_found);
 
-    const poolLp = this.assets.get(pair).Supply;
+    const poolLp = this.assets.getSwapSupply(pair);
     const reserve0 = this.assets.get(tick0).balanceOf(pair);
     const reserve1 = this.assets.get(tick1).balanceOf(pair);
     const acquire0 = uintCal([lp, "mul", reserve0, "div", poolLp]);
@@ -253,7 +259,8 @@ export class Contract {
       if (this.observer) {
         this.observer.notify<NotifyKlastData>("klast", {
           tick: pair,
-          value: this.status.kLast[pair],
+          k: this.status.kLast[pair],
+          address: params.address,
         });
       }
     }
@@ -261,7 +268,7 @@ export class Contract {
     return { tick0, tick1, amount0: acquire0, amount1: acquire1 };
   }
 
-  public swap(params: SwapIn): SwapOut {
+  public swap(params: SwapIn, swapFeeRate1000: string): SwapOut {
     const {
       tickIn,
       tickOut,
@@ -286,11 +293,14 @@ export class Contract {
 
     if (exactType == ExactType.exactIn) {
       amountIn = amount;
-      amountOut = this.getAmountOut({
-        amountIn,
-        reserveIn,
-        reserveOut,
-      });
+      amountOut = this.getAmountOut(
+        {
+          amountIn,
+          reserveIn,
+          reserveOut,
+        },
+        swapFeeRate1000
+      );
 
       const amountOutMin = uintCal([
         expect,
@@ -304,11 +314,14 @@ export class Contract {
       ret = amountOut;
     } else {
       amountOut = amount;
-      amountIn = this.getAmountIn({
-        amountOut,
-        reserveIn,
-        reserveOut,
-      });
+      amountIn = this.getAmountIn(
+        {
+          amountOut,
+          reserveIn,
+          reserveOut,
+        },
+        swapFeeRate1000
+      );
 
       const amountInMax = uintCal([
         expect,
@@ -327,7 +340,7 @@ export class Contract {
     return { amount: ret };
   }
 
-  getAmountOut(params: AmountInputIn) {
+  getAmountOut(params: AmountInputIn, swapFeeRate1000: string) {
     const { amountIn, reserveIn, reserveOut } = params;
     checkGtZero(amountIn);
     need(
@@ -337,7 +350,7 @@ export class Contract {
     const amountInWithFee = uintCal([
       amountIn,
       "mul",
-      uintCal(["1000", "sub", this.config.swapFeeRate1000]),
+      uintCal(["1000", "sub", swapFeeRate1000 || this.config.swapFeeRate1000]),
     ]);
     const numerator = uintCal([amountInWithFee, "mul", reserveOut]);
     const denominator = uintCal([
@@ -350,7 +363,7 @@ export class Contract {
     return uintCal([numerator, "div", denominator]);
   }
 
-  getAmountIn(params: AmountOutputIn) {
+  getAmountIn(params: AmountOutputIn, swapFeeRate1000: string) {
     const { amountOut, reserveIn, reserveOut } = params;
     checkGtZero(amountOut);
     need(
@@ -364,7 +377,7 @@ export class Contract {
       "sub",
       amountOut,
       "mul",
-      uintCal(["1000", "sub", this.config.swapFeeRate1000]),
+      uintCal(["1000", "sub", swapFeeRate1000 || this.config.swapFeeRate1000]),
     ]);
     return uintCal([numerator, "div", denominator, "add", "1"]);
   }
@@ -389,7 +402,7 @@ export class Contract {
         const rootKLast = uintCal([this.status.kLast[pair], "sqrt"]);
         if (bn(rootK).gt(rootKLast)) {
           const numerator = uintCal([
-            this.assets.get(pair).Supply,
+            this.assets.getSwapSupply(pair),
             "mul",
             uintCal([rootK, "sub", rootKLast]),
           ]);
@@ -415,12 +428,6 @@ export class Contract {
       }
     } else {
       this.status.kLast[pair] = "0";
-      if (this.observer) {
-        this.observer.notify<NotifyKlastData>("klast", {
-          tick: pair,
-          value: this.status.kLast[pair],
-        });
-      }
     }
   }
 }
