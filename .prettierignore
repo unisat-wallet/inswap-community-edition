@@ -1,22 +1,12 @@
-# Prettier 忽略文件
-# 忽略构建输出目录
 dist/
 build/
 node_modules/
-
-# 忽略日志文件
 logs/
 *.log
-
-# 忽略配置文件
 *.ignore.json
 config.ignore.json
-
-# 忽略测试和临时文件
 test/
 ignore/
 patches/
-
-# 忽略特定文件类型
 *.min.js
 *.min.css
